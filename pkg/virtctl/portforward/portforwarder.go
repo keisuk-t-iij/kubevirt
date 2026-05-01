@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	v1 "kubevirt.io/api/core/v1"
 	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 	"kubevirt.io/client-go/log"
 )
@@ -16,6 +17,18 @@ type portForwarder struct {
 
 type portforwardableResource interface {
 	PortForward(name string, port int, protocol string) (kvcorev1.StreamInterface, error)
+}
+
+type vsockableResource interface {
+	VSOCK(name string, options *v1.VSOCKOptions) (kvcorev1.StreamInterface, error)
+}
+
+type vsockResourceAdapter struct {
+	resource vsockableResource
+}
+
+func (a *vsockResourceAdapter) PortForward(name string, port int, _ string) (kvcorev1.StreamInterface, error) {
+	return a.resource.VSOCK(name, &v1.VSOCKOptions{TargetPort: uint32(port)})
 }
 
 func (p *portForwarder) startForwarding(address *net.IPAddr, port forwardedPort) error {
