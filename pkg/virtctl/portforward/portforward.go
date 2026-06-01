@@ -39,6 +39,7 @@ import (
 const (
 	forwardToStdioFlag = "stdio"
 	addressFlag        = "address"
+	vsockFlag          = "vsock"
 
 	vm  = "vm"
 	vmi = "vmi"
@@ -47,6 +48,7 @@ const (
 var (
 	forwardToStdio bool
 	address        string = "127.0.0.1"
+	vsock          bool
 )
 
 func NewCommand() *cobra.Command {
@@ -73,6 +75,8 @@ func NewCommand() *cobra.Command {
 		fmt.Sprintf("--%s=true: Set this to true to forward the tunnel to stdout/stdin; Only works with a single port", forwardToStdioFlag))
 	cmd.Flags().StringVar(&address, addressFlag, address,
 		fmt.Sprintf("--%s=: Set this to the address the local ports should be opened on", addressFlag))
+	cmd.Flags().BoolVar(&vsock, vsockFlag, vsock,
+		fmt.Sprintf("--%s=true: Use the vsock subresource instead of portforward; Only supported for virtualmachineinstances", vsockFlag))
 	cmd.SetUsageTemplate(templates.UsageTemplate())
 	return cmd
 }
@@ -140,6 +144,13 @@ func (o *PortForward) prepareCommand(args []string, fallbackNamespace string) (k
 }
 
 func (o *PortForward) setResource(kind, namespace string, client kubecli.KubevirtClient) error {
+	if vsock {
+		if kind != vmi {
+			return errors.New("--vsock flag is only supported for virtualmachineinstances")
+		}
+		o.resource = &vsockResourceAdapter{resource: client.VirtualMachineInstance(namespace)}
+		return nil
+	}
 	if kind == vmi {
 		o.resource = client.VirtualMachineInstance(namespace)
 	} else if kind == vm {
