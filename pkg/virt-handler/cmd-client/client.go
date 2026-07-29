@@ -38,6 +38,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/utils/ptr"
 
 	backupv1 "kubevirt.io/api/backup/v1alpha1"
 	v1 "kubevirt.io/api/core/v1"
@@ -66,15 +67,29 @@ const StandardLauncherSocketFileName = "launcher-sock"
 const StandardInitLauncherSocketFileName = "launcher-init-sock"
 const StandardLauncherUnresponsiveFileName = "launcher-unresponsive"
 
+type StallDetectorOptions struct {
+	StallMargin               float64
+	StallProgressTimeout      uint64
+	SwitchoverTimeout         uint64
+	EwmaAlpha                 float64
+	PrecopyPossibleFactor     float64
+	PatienceWindowDecayFactor float64
+	SearchLocalMinima         bool
+	CompletionTimeoutFactor   float64
+}
+
 type MigrationOptions struct {
 	Bandwidth                resource.Quantity
 	ProgressTimeout          int64
 	CompletionTimeoutPerGiB  int64
+	MaxDowntimeMs            uint64
 	UnsafeMigration          bool
 	AllowAutoConverge        bool
 	AllowPostCopy            bool
 	ParallelMigrationThreads *uint
 	AllowWorkloadDisruption  bool
+	StallDetectorOptions     *StallDetectorOptions
+	Compression              *string
 }
 
 type LauncherClient interface {
@@ -114,6 +129,7 @@ type LauncherClient interface {
 	GetScreenshot(*v1.VirtualMachineInstance) (*cmdv1.ScreenshotResponse, error)
 	VirtualMachineBackup(vmi *v1.VirtualMachineInstance, options *backupv1.BackupOptions) error
 	RedefineCheckpoint(vmi *v1.VirtualMachineInstance, checkpoint *backupv1.BackupCheckpoint) (checkpointInvalid bool, err error)
+	GetVMStats(request *cmdv1.VMStatsRequest) (*stats.VMStats, error)
 }
 
 type VirtLauncherClient struct {
@@ -490,6 +506,50 @@ func (c *VirtLauncherClient) GetDomainDirtyRateStats() (dirtyRateMbps int64, err
 	return domainDirtyRateStatsResponse.DirtyRateMbs, nil
 }
 
+func (c *VirtLauncherClient) GetVMStats(request *cmdv1.VMStatsRequest) (*stats.VMStats, error) {
+	result := &stats.VMStats{}
+	ctx, cancel := context.WithTimeout(context.Background(), shortTimeout)
+	defer cancel()
+
+	vmstatsResponse, err := c.v1client.GetVMStats(ctx, request)
+	var response *cmdv1.Response
+	if vmstatsResponse != nil {
+		response = vmstatsResponse.Response
+	}
+
+	if err := handleError(err, "GetVMStats", response); err != nil || vmstatsResponse == nil {
+		return result, err
+	}
+
+	if vmstatsResponse.GetDomainStats() != nil && vmstatsResponse.GetDomainStats().GetDomainStats() != "" {
+		if err := json.Unmarshal([]byte(vmstatsResponse.DomainStats.DomainStats), &result.DomainStats); err != nil {
+			return nil, err
+		}
+	}
+
+	if vmstatsResponse.GetDirtyRateStats() != nil {
+		result.DirtyRateMbps = ptr.To(vmstatsResponse.GetDirtyRateStats().GetDirtyRateMbs())
+	}
+
+	result.GuestAgentVersion = vmstatsResponse.GetGuestAgentVersion().GetMessage()
+	result.GuestGetLoad = vmstatsResponse.GetGuestGetLoad().GetMessage()
+	result.GuestGetCpuStats = vmstatsResponse.GetGuestGetCpuStats().GetMessage()
+	result.GuestGetDiskStats = vmstatsResponse.GetGuestGetDiskStats().GetMessage()
+	result.GuestGetTime = vmstatsResponse.GetGuestGetTime().GetMessage()
+	result.GuestGetVcpus = vmstatsResponse.GetGuestGetVcpus().GetMessage()
+	result.GuestGetMemoryBlockInfo = vmstatsResponse.GetGuestGetMemoryBlockInfo().GetMessage()
+	result.GuestGetUsers = vmstatsResponse.GetGuestGetUsers().GetMessage()
+	result.GuestGetOsInfo = vmstatsResponse.GetGuestGetOsInfo().GetMessage()
+	result.GuestGetDisks = vmstatsResponse.GetGuestGetDisks().GetMessage()
+	result.GuestGetHostName = vmstatsResponse.GetGuestGetHostName().GetMessage()
+	result.GuestGetTimezone = vmstatsResponse.GetGuestGetTimezone().GetMessage()
+	result.GuestNetworkGetRoute = vmstatsResponse.GetGuestNetworkGetRoute().GetMessage()
+	result.GuestNetworkGetInterfaces = vmstatsResponse.GetGuestNetworkGetInterfaces().GetMessage()
+	result.GuestGetMemoryBlocks = vmstatsResponse.GetGuestGetMemoryBlocks().GetMessage()
+
+	return result, err
+}
+
 func (c *VirtLauncherClient) GetQemuVersion() (string, error) {
 	request := &cmdv1.EmptyRequest{}
 	ctx, cancel := context.WithTimeout(context.Background(), shortTimeout)
@@ -661,14 +721,11 @@ func (c *VirtLauncherClient) Exec(domainName, command string, args []string, tim
 	defer cancel()
 
 	resp, err := c.v1client.Exec(ctx, request)
-	if resp == nil {
-		return exitCode, stdOut, err
+	if resp != nil {
+		exitCode = int(resp.ExitCode)
+		stdOut = resp.StdOut
 	}
-
-	exitCode = int(resp.ExitCode)
-	stdOut = resp.StdOut
-
-	return exitCode, stdOut, err
+	return exitCode, stdOut, handleError(err, "Exec", resp.GetResponse())
 }
 
 func (c *VirtLauncherClient) GuestPing(domainName string, timeoutSeconds int32) error {
@@ -684,8 +741,8 @@ func (c *VirtLauncherClient) GuestPing(domainName string, timeoutSeconds int32) 
 	)
 	defer cancel()
 
-	_, err := c.v1client.GuestPing(ctx, request)
-	return err
+	resp, err := c.v1client.GuestPing(ctx, request)
+	return handleError(err, "GuestPing", resp.GetResponse())
 }
 
 func (c *VirtLauncherClient) GetScreenshot(vmi *v1.VirtualMachineInstance) (*cmdv1.ScreenshotResponse, error) {
@@ -703,7 +760,12 @@ func (c *VirtLauncherClient) GetScreenshot(vmi *v1.VirtualMachineInstance) (*cmd
 	ctx, cancel := context.WithTimeout(context.Background(), shortTimeout)
 	defer cancel()
 
-	return c.v1client.GetScreenshot(ctx, request)
+	resp, err := c.v1client.GetScreenshot(ctx, request)
+	err = handleError(err, "GetScreenshot", resp.GetResponse())
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *VirtLauncherClient) GetSEVInfo() (*v1.SEVPlatformInfo, error) {
@@ -831,13 +893,11 @@ func (c *VirtLauncherClient) RedefineCheckpoint(vmi *v1.VirtualMachineInstance, 
 	ctx, cancel := context.WithTimeout(context.Background(), longTimeout)
 	defer cancel()
 	response, err := c.v1client.RedefineCheckpoint(ctx, request)
-	if err != nil {
-		return false, fmt.Errorf("RedefineCheckpoint call failed: %v", err)
+	if err = handleError(err, "RedefineCheckpoint", response.GetResponse()); err != nil {
+		if response != nil {
+			return response.CheckpointInvalid, err
+		}
+		return false, err
 	}
-
-	if response.Response != nil && !response.Response.Success {
-		return response.CheckpointInvalid, fmt.Errorf("RedefineCheckpoint failed: %s", response.Response.Message)
-	}
-
 	return false, nil
 }

@@ -252,22 +252,6 @@ func (c *Controller) sync(vmi *virtv1.VirtualMachineInstance, pod *k8sv1.Pod, da
 	return nil, pod
 }
 
-func (c *Controller) getOwnerVM(vmi *virtv1.VirtualMachineInstance) *virtv1.VirtualMachine {
-	controllerRef := v1.GetControllerOf(vmi)
-	if controllerRef == nil || controllerRef.Kind != virtv1.VirtualMachineGroupVersionKind.Kind {
-		return nil
-	}
-	obj, exists, _ := c.vmStore.GetByKey(controller.NamespacedKey(vmi.Namespace, controllerRef.Name))
-	if !exists {
-		return nil
-	}
-	ownerVM := obj.(*virtv1.VirtualMachine)
-	if controllerRef.UID == ownerVM.UID {
-		return ownerVM.DeepCopy()
-	}
-	return nil
-}
-
 // updateStatus handles the VMI's lifecycle status updates.
 func (c *Controller) updateStatus(vmi *virtv1.VirtualMachineInstance, pod *k8sv1.Pod, dataVolumes []*cdiv1.DataVolume, syncErr common.SyncError) error {
 	key := controller.VirtualMachineInstanceKey(vmi)
@@ -529,8 +513,6 @@ func (c *Controller) updateStatus(vmi *virtv1.VirtualMachineInstance, pod *k8sv1
 
 		c.syncMigrationRequiredCondition(vmiCopy, pod)
 
-		c.checkEphemeralHotplugVolumes(vmiCopy)
-
 	case vmi.IsScheduled():
 		if !vmiPodExists || (vmiCopy.IsMigrationTarget() && controller.PodIsDown(pod)) || migrationTargetFailed {
 			if vmiCopy.IsMigrationTarget() {
@@ -707,17 +689,6 @@ func prepareVMIPatch(oldVMI, newVMI *virtv1.VirtualMachineInstance) *patch.Patch
 		}
 	}
 
-	if !equality.Semantic.DeepEqual(oldVMI.Annotations, newVMI.Annotations) {
-		if oldVMI.Annotations == nil {
-			patchSet.AddOption(patch.WithAdd("/metadata/annotations", newVMI.Annotations))
-		} else {
-			patchSet.AddOption(
-				patch.WithTest("/metadata/annotations", oldVMI.Annotations),
-				patch.WithReplace("/metadata/annotations", newVMI.Annotations),
-			)
-		}
-	}
-
 	if !equality.Semantic.DeepEqual(oldVMI.Finalizers, newVMI.Finalizers) {
 		if oldVMI.Finalizers == nil {
 			patchSet.AddOption(patch.WithAdd("/metadata/finalizers", newVMI.Finalizers))
@@ -753,26 +724,64 @@ func prepareVMIPatch(oldVMI, newVMI *virtv1.VirtualMachineInstance) *patch.Patch
 func (c *Controller) syncDynamicAnnotationsAndLabelsToPod(vmi *virtv1.VirtualMachineInstance, pod *k8sv1.Pod) (*k8sv1.Pod, error) {
 	patchSet := patch.New()
 	newPodAnnotations := maps.Clone(pod.Annotations)
+	if newPodAnnotations == nil {
+		newPodAnnotations = map[string]string{}
+	}
 	newPodLabels := maps.Clone(pod.Labels)
+	if newPodLabels == nil {
+		newPodLabels = map[string]string{}
+	}
 
-	syncMap := func(keys []string, vmiMap, podNewMap, podOrigMap map[string]string, subPath string) {
-		if podNewMap == nil {
-			podNewMap = map[string]string{}
-		}
-
+	syncMap := func(patterns []string, vmiMap, podNewMap, podOrigMap map[string]string, subPath string) {
 		changed := false
-		for _, key := range keys {
+
+		syncKey := func(key string) {
 			vmiVal, vmiExists := vmiMap[key]
 			podVal, podExists := podNewMap[key]
 			if vmiExists == podExists && vmiVal == podVal {
-				continue
+				return
 			}
 			changed = true
 			if !vmiExists {
 				delete(podNewMap, key)
-			} else {
-				podNewMap[key] = vmiVal
+				return
 			}
+			podNewMap[key] = vmiVal
+		}
+
+		syncPrefix := func(prefix string) {
+			visited := map[string]struct{}{}
+			for key := range vmiMap {
+				if strings.HasPrefix(key, prefix) {
+					visited[key] = struct{}{}
+					syncKey(key)
+				}
+			}
+			for key := range podNewMap {
+				if strings.HasPrefix(key, prefix) {
+					if _, ok := visited[key]; ok {
+						continue
+					}
+					visited[key] = struct{}{}
+					syncKey(key)
+				}
+			}
+		}
+
+		for _, pattern := range patterns {
+			if pattern == "" {
+				continue
+			}
+			if strings.HasSuffix(pattern, "*") {
+				prefix := strings.TrimSuffix(pattern, "*")
+				// Reject bare "*" to prevent accidental sync-all. Only prefix wildcards like "vendor.io/*" are supported.
+				if prefix == "" {
+					continue
+				}
+				syncPrefix(prefix)
+				continue
+			}
+			syncKey(pattern)
 		}
 
 		if !changed {
@@ -966,7 +975,7 @@ func (c *Controller) syncPausedConditionToPod(vmi *virtv1.VirtualMachineInstance
 	return nil
 }
 
-// checkForContainerImageError checks if an error has occured while handling the image of any of the pod's containers
+// checkForContainerImageError checks if an error has occurred while handling the image of any of the pod's containers
 // (including init containers), and returns a syncErr with the details of the error, or nil otherwise.
 func checkForContainerImageError(pod *k8sv1.Pod) common.SyncError {
 	containerStatuses := append(append([]k8sv1.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)

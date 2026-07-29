@@ -38,26 +38,29 @@ import (
 	"kubevirt.io/kubevirt/tests/console"
 	"kubevirt.io/kubevirt/tests/decorators"
 	"kubevirt.io/kubevirt/tests/events"
+	"kubevirt.io/kubevirt/tests/flags"
 	"kubevirt.io/kubevirt/tests/framework/kubevirt"
 	"kubevirt.io/kubevirt/tests/libinfra"
 	"kubevirt.io/kubevirt/tests/libmigration"
+	"kubevirt.io/kubevirt/tests/libnet"
 	"kubevirt.io/kubevirt/tests/libnode"
 	"kubevirt.io/kubevirt/tests/libpod"
 	"kubevirt.io/kubevirt/tests/libvmifact"
 	"kubevirt.io/kubevirt/tests/libvmops"
+	"kubevirt.io/kubevirt/tests/testsuite"
 )
 
 var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes, func() {
-	Context("with a host-model cpu", func() {
+	Context("with a host-model cpu", decorators.WgS390x, func() {
 		It("[test_id:6981]should migrate only to nodes supporting right cpu model", func() {
 			sourceNode, targetNode, err := libmigration.GetValidSourceNodeAndTargetNodeForHostModelMigration(kubevirt.Client())
 			if err != nil {
-				Skip(err.Error())
+				Skip(err.Error()) //nolint:forbidigo
 			}
 
 			By("Creating a VMI with default CPU mode to land in source node")
 			vmi := libvmifact.NewGuestless(
-				libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
+				libvmi.WithInterface(libvmi.NewInterface(v1.DefaultPodNetwork().Name, libvmi.WithMasqueradeBinding())),
 				libvmi.WithNetwork(v1.DefaultPodNetwork()),
 				libvmi.WithEvictionStrategy(v1.EvictionStrategyLiveMigrate),
 				libvmi.WithCPUModel(v1.CPUModeHostModel),
@@ -70,7 +73,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			}
 
 			By("Starting the VirtualMachineInstance")
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsHuge)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsHuge())
 			Expect(vmi.Spec.Domain.CPU.Model).To(Equal(v1.CPUModeHostModel))
 
 			By("Fetching original host CPU model & supported CPU features")
@@ -110,11 +113,15 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			BeforeEach(func() {
 				var err error
 				By("Creating a VMI with default CPU mode")
-				vmi = alpineVMIWithEvictionStrategy()
+				vmi = libvmifact.NewGuestless(
+					libnet.WithMasqueradeNetworking(),
+					libvmi.WithEvictionStrategy(v1.EvictionStrategyLiveMigrate),
+					libvmi.WithNamespace(testsuite.GetTestNamespace(nil)),
+				)
 				vmi.Spec.Domain.CPU = &v1.CPU{Model: v1.CPUModeHostModel}
 
 				By("Starting the VirtualMachineInstance")
-				vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsHuge)
+				vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsHuge())
 
 				By("Saving the original node's state")
 				node, err = kubevirt.Client().CoreV1().Nodes().Get(context.Background(), vmi.Status.NodeName, metav1.GetOptions{})
@@ -166,15 +173,19 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			BeforeEach(func() {
 				nodes = libnode.GetAllSchedulableNodes(kubevirt.Client()).Items
 				if len(nodes) == 1 || len(nodes) > 10 {
-					Skip("This test can't run with single node and it's too slow to run with more than 10 nodes")
+					Skip("This test can't run with single node and it's too slow to run with more than 10 nodes") //nolint:forbidigo
 				}
 
 				By("Creating a VMI with default CPU mode")
-				vmi = alpineVMIWithEvictionStrategy()
+				vmi = libvmifact.NewGuestless(
+					libnet.WithMasqueradeNetworking(),
+					libvmi.WithEvictionStrategy(v1.EvictionStrategyLiveMigrate),
+					libvmi.WithNamespace(testsuite.GetTestNamespace(nil)),
+				)
 				vmi.Spec.Domain.CPU = &v1.CPU{Model: v1.CPUModeHostModel}
 
 				By("Starting the VirtualMachineInstance")
-				vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsHuge)
+				vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsHuge())
 
 				for index, node := range nodes {
 					patchedNode := libinfra.ExpectStoppingNodeLabellerToSucceed(node.Name, kubevirt.Client())
@@ -235,7 +246,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			var err error
 			sourceNode, targetNode, err = libmigration.GetValidSourceNodeAndTargetNodeForHostModelMigration(kubevirt.Client())
 			if err != nil {
-				Skip(err.Error())
+				Skip(err.Error()) //nolint:forbidigo
 			}
 			targetNode = libinfra.ExpectStoppingNodeLabellerToSucceed(targetNode.Name, kubevirt.Client())
 		})
@@ -255,7 +266,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			libnode.AddLabelToNode(targetNode.Name, fakeRequiredFeature, "true")
 
 			vmiToMigrate := libvmifact.NewFedora(
-				libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
+				libvmi.WithInterface(libvmi.NewInterface(v1.DefaultPodNetwork().Name, libvmi.WithMasqueradeBinding())),
 				libvmi.WithNetwork(v1.DefaultPodNetwork()),
 			)
 			By("Creating a VMI with default CPU mode to land in source node")
@@ -267,7 +278,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 				NodeAffinity: nodeAffinityRule,
 			}
 			By("Starting the VirtualMachineInstance")
-			vmiToMigrate = libvmops.RunVMIAndExpectLaunch(vmiToMigrate, libvmops.StartupTimeoutSecondsHuge)
+			vmiToMigrate = libvmops.RunVMIAndExpectLaunch(vmiToMigrate, flags.StartupTimeoutSecondsHuge())
 			Expect(vmiToMigrate.Status.NodeName).To(Equal(sourceNode.Name))
 			Expect(console.LoginToFedora(vmiToMigrate)).To(Succeed())
 
@@ -319,7 +330,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 			targetNode = libnode.AddLabelToNode(targetNode.Name, fakeHostModel, "true")
 
 			vmiToMigrate := libvmifact.NewFedora(
-				libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
+				libvmi.WithInterface(libvmi.NewInterface(v1.DefaultPodNetwork().Name, libvmi.WithMasqueradeBinding())),
 				libvmi.WithNetwork(v1.DefaultPodNetwork()),
 			)
 			By("Creating a VMI with default CPU mode to land in source node")
@@ -331,7 +342,7 @@ var _ = Describe(SIG("VM Live Migration", decorators.RequiresTwoSchedulableNodes
 				NodeAffinity: nodeAffinityRule,
 			}
 			By("Starting the VirtualMachineInstance")
-			vmiToMigrate = libvmops.RunVMIAndExpectLaunch(vmiToMigrate, libvmops.StartupTimeoutSecondsHuge)
+			vmiToMigrate = libvmops.RunVMIAndExpectLaunch(vmiToMigrate, flags.StartupTimeoutSecondsHuge())
 			Expect(vmiToMigrate.Status.NodeName).To(Equal(sourceNode.Name))
 			Expect(console.LoginToFedora(vmiToMigrate)).To(Succeed())
 

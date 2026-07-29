@@ -26,6 +26,7 @@ import (
 	"kubevirt.io/api/backup"
 	"kubevirt.io/api/clone"
 	"kubevirt.io/api/export"
+	"kubevirt.io/api/plugin"
 	"kubevirt.io/api/pool"
 	"kubevirt.io/api/snapshot"
 
@@ -60,22 +61,24 @@ const (
 	apiVMSnapshotContents = "virtualmachinesnapshotcontents"
 	apiVMBackups          = "virtualmachinebackups"
 	apiVMBackupTrackers   = "virtualmachinebackuptrackers"
+	apiPlugins            = "plugins"
 	apiVMRestores         = "virtualmachinerestores"
 	apiVMExports          = "virtualmachineexports"
 	apiVMClones           = "virtualmachineclones"
 	apiVMPools            = "virtualmachinepools"
 
-	apiVMExpandSpec     = "virtualmachines/expand-spec"
-	apiVMPortForward    = "virtualmachines/portforward"
-	apiVMStart          = "virtualmachines/start"
-	apiVMStop           = "virtualmachines/stop"
-	apiVMRestart        = "virtualmachines/restart"
-	apiVMAddVolume      = "virtualmachines/addvolume"
-	apiVMRemoveVolume   = "virtualmachines/removevolume"
-	apiVMMigrate        = "virtualmachines/migrate"
-	apiVMMemoryDump     = "virtualmachines/memorydump"
-	apiVMObjectGraph    = "virtualmachines/objectgraph"
-	apiVMEvacuateCancel = "virtualmachines/evacuate/cancel"
+	apiVMExpandSpec       = "virtualmachines/expand-spec"
+	apiVMPortForward      = "virtualmachines/portforward"
+	apiVMStart            = "virtualmachines/start"
+	apiVMStop             = "virtualmachines/stop"
+	apiVMRestart          = "virtualmachines/restart"
+	apiVMAddVolume        = "virtualmachines/addvolume"
+	apiVMRemoveVolume     = "virtualmachines/removevolume"
+	apiVMMigrate          = "virtualmachines/migrate"
+	apiVMMemoryDump       = "virtualmachines/memorydump"
+	apiVMRemoveMemoryDump = "virtualmachines/removememorydump"
+	apiVMObjectGraph      = "virtualmachines/objectgraph"
+	apiVMEvacuateCancel   = "virtualmachines/evacuate/cancel"
 
 	apiVMInstancesConsole                   = "virtualmachineinstances/console"
 	apiVMInstancesVNC                       = "virtualmachineinstances/vnc"
@@ -268,6 +271,7 @@ func newAdminClusterRole() *rbacv1.ClusterRole {
 					apiVMAddVolume,
 					apiVMRemoveVolume,
 					apiVMMemoryDump,
+					apiVMRemoveMemoryDump,
 					apiVMEvacuateCancel,
 				},
 				Verbs: []string{
@@ -330,6 +334,17 @@ func newAdminClusterRole() *rbacv1.ClusterRole {
 				Resources: []string{
 					apiVMBackups,
 					apiVMBackupTrackers,
+				},
+				Verbs: []string{
+					"get", "delete", "create", "update", "patch", "list", "watch", "deletecollection",
+				},
+			},
+			{
+				APIGroups: []string{
+					plugin.GroupName,
+				},
+				Resources: []string{
+					apiPlugins,
 				},
 				Verbs: []string{
 					"get", "delete", "create", "update", "patch", "list", "watch", "deletecollection",
@@ -476,6 +491,7 @@ func newEditClusterRole() *rbacv1.ClusterRole {
 					apiVMAddVolume,
 					apiVMRemoveVolume,
 					apiVMMemoryDump,
+					apiVMRemoveMemoryDump,
 					apiVMEvacuateCancel,
 				},
 				Verbs: []string{
@@ -802,6 +818,17 @@ func newViewClusterRole() *rbacv1.ClusterRole {
 				},
 				Resources: []string{
 					migrations.ResourceMigrationPolicies,
+				},
+				Verbs: []string{
+					"get", "list", "watch",
+				},
+			},
+			{
+				APIGroups: []string{
+					plugin.GroupName,
+				},
+				Resources: []string{
+					apiPlugins,
 				},
 				Verbs: []string{
 					"get", "list", "watch",

@@ -30,6 +30,7 @@ import (
 	"kubevirt.io/api/export"
 	"kubevirt.io/api/instancetype"
 	"kubevirt.io/api/migrations"
+	"kubevirt.io/api/plugin"
 	"kubevirt.io/api/pool"
 	"kubevirt.io/api/snapshot"
 
@@ -117,6 +118,7 @@ var _ = Describe("Cluster role and cluster role bindings", func() {
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMAddVolume), virtv1.SubresourceGroupName, apiVMRestart, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMRemoveVolume), virtv1.SubresourceGroupName, apiVMAddVolume, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMMemoryDump), virtv1.SubresourceGroupName, apiVMMemoryDump, "update"),
+				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMRemoveMemoryDump), virtv1.SubresourceGroupName, apiVMRemoveMemoryDump, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMEvacuateCancel), virtv1.SubresourceGroupName, apiVMEvacuateCancel, "update"),
 
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiExpandVmSpec), virtv1.SubresourceGroupName, apiExpandVmSpec, "update"),
@@ -185,6 +187,7 @@ var _ = Describe("Cluster role and cluster role bindings", func() {
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMAddVolume), virtv1.SubresourceGroupName, apiVMRestart, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMRemoveVolume), virtv1.SubresourceGroupName, apiVMAddVolume, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMMemoryDump), virtv1.SubresourceGroupName, apiVMMemoryDump, "update"),
+				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMRemoveMemoryDump), virtv1.SubresourceGroupName, apiVMRemoveMemoryDump, "update"),
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiVMEvacuateCancel), virtv1.SubresourceGroupName, apiVMEvacuateCancel, "update"),
 
 				Entry(fmt.Sprintf("update %s/%s", virtv1.SubresourceGroupName, apiExpandVmSpec), virtv1.SubresourceGroupName, apiExpandVmSpec, "update"),
@@ -272,6 +275,8 @@ var _ = Describe("Cluster role and cluster role bindings", func() {
 				Entry(fmt.Sprintf("get, list, watch %s/%s", migrations.GroupName, migrations.ResourceMigrationPolicies), migrations.GroupName, migrations.ResourceMigrationPolicies, "get", "list", "watch"),
 
 				Entry(fmt.Sprintf("get, list, watch %s/%s", backup.GroupName, apiVMBackups), backup.GroupName, apiVMBackups, "get", "list", "watch"),
+
+				Entry(fmt.Sprintf("get, list, watch %s/%s", plugin.GroupName, apiPlugins), plugin.GroupName, apiPlugins, "get", "list", "watch"),
 			)
 		})
 

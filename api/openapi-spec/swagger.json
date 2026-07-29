@@ -12837,28 +12837,6 @@
      }
     }
    },
-   "k8s.io.api.core.v1.PodResourceClaim": {
-    "description": "PodResourceClaim references exactly one ResourceClaim, either directly or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim for the pod.\n\nIt adds a name to it that uniquely identifies the ResourceClaim inside the Pod. Containers that need access to the ResourceClaim reference it with this name.",
-    "type": "object",
-    "required": [
-     "name"
-    ],
-    "properties": {
-     "name": {
-      "description": "Name uniquely identifies this resource claim inside the pod. This must be a DNS_LABEL.",
-      "type": "string",
-      "default": ""
-     },
-     "resourceClaimName": {
-      "description": "ResourceClaimName is the name of a ResourceClaim object in the same namespace as this pod.\n\nExactly one of ResourceClaimName and ResourceClaimTemplateName must be set.",
-      "type": "string"
-     },
-     "resourceClaimTemplateName": {
-      "description": "ResourceClaimTemplateName is the name of a ResourceClaimTemplate object in the same namespace as this pod.\n\nThe template will be used to create a new ResourceClaim, which will be bound to this pod. When this pod is deleted, the ResourceClaim will also be deleted. The pod name and resource name, along with a generated component, will be used to form a unique name for the ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.\n\nThis field is immutable and no changes will be made to the corresponding ResourceClaim by the control plane after creating the ResourceClaim.\n\nExactly one of ResourceClaimName and ResourceClaimTemplateName must be set.",
-      "type": "string"
-     }
-    }
-   },
    "k8s.io.api.core.v1.PreferredSchedulingTerm": {
     "description": "An empty preferred scheduling term matches all objects with implicit weight 0 (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).",
     "type": "object",
@@ -14183,6 +14161,19 @@
      }
     }
    },
+   "v1.ClaimRequest": {
+    "type": "object",
+    "properties": {
+     "claimName": {
+      "description": "ClaimName references the name of an entry in the VMI's spec.resourceClaims[] array. The referenced entry may use either resourceClaimName or resourceClaimTemplateName.",
+      "type": "string"
+     },
+     "requestName": {
+      "description": "RequestName specifies which request from the ResourceClaim/ResourceClaimTemplate spec.devices.requests array this claim request corresponds to.",
+      "type": "string"
+     }
+    }
+   },
    "v1.ClientPassthroughDevices": {
     "description": "Represent a subset of client devices that can be accessed by VMI. At the moment only, USB devices using Usbredir's library and tooling. Another fit would be a smartcard with libcacard.\n\nThe struct is currently empty as there is no immediate request for user-facing APIs. This structure simply turns on USB redirection of UsbClientPassthroughMaxNumberOf devices.",
     "type": "object"
@@ -15138,6 +15129,19 @@
      }
     }
    },
+   "v1.ExperimentalMigrationOptions": {
+    "description": "ExperimentalMigrationOptions is an alpha API for experimental migration tunables. It is intended for experimental purposes only and will be removed in the future.",
+    "type": "object",
+    "properties": {
+     "compression": {
+      "description": "Compression selects the algorithm for compressing the live migration data stream. When omitted (nil) or set to \"none\", compression is disabled.",
+      "type": "string"
+     },
+     "stallDetector": {
+      "$ref": "#/definitions/v1.StallDetectorOptions"
+     }
+    }
+   },
    "v1.FeatureAPIC": {
     "type": "object",
     "properties": {
@@ -15385,7 +15389,7 @@
     ],
     "properties": {
      "claimName": {
-      "description": "ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this device is allocated",
+      "description": "ClaimName references the name of an entry in the VMI's spec.resourceClaims[] array. The referenced entry may use either resourceClaimName or resourceClaimTemplateName.",
       "type": "string"
      },
      "deviceName": {
@@ -15398,7 +15402,7 @@
       "default": ""
      },
      "requestName": {
-      "description": "RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this device is requested",
+      "description": "RequestName specifies which request from the ResourceClaim/ResourceClaimTemplate spec.devices.requests array this claim request corresponds to.",
       "type": "string"
      },
      "tag": {
@@ -15491,7 +15495,7 @@
     ],
     "properties": {
      "claimName": {
-      "description": "ClaimName needs to be provided from the list vmi.spec.resourceClaims[].name where this device is allocated",
+      "description": "ClaimName references the name of an entry in the VMI's spec.resourceClaims[] array. The referenced entry may use either resourceClaimName or resourceClaimTemplateName.",
       "type": "string"
      },
      "deviceName": {
@@ -15503,7 +15507,7 @@
       "default": ""
      },
      "requestName": {
-      "description": "RequestName needs to be provided from resourceClaim.spec.devices.requests[].name where this device is requested",
+      "description": "RequestName specifies which request from the ResourceClaim/ResourceClaimTemplate spec.devices.requests array this claim request corresponds to.",
       "type": "string"
      },
      "tag": {
@@ -15767,8 +15771,17 @@
       "description": "If specified, the virtual network interface will be placed on the guests pci address with the specified PCI address. For example: 0000:81:01.10",
       "type": "string"
      },
+     "portRanges": {
+      "description": "List of port ranges to be forwarded to the virtual machine. Mutually exclusive with ports. Only supported on masquerade interfaces. This feature is in Alpha.",
+      "type": "array",
+      "items": {
+       "default": {},
+       "$ref": "#/definitions/v1.PortRange"
+      },
+      "x-kubernetes-list-type": "atomic"
+     },
      "ports": {
-      "description": "List of ports to be forwarded to the virtual machine.",
+      "description": "List of ports to be forwarded to the virtual machine. Mutually exclusive with portRanges.",
       "type": "array",
       "items": {
        "default": {},
@@ -16082,7 +16095,7 @@
       "x-kubernetes-list-type": "atomic"
      },
      "imagePullPolicy": {
-      "description": "Possible enum values:\n - `\"Always\"` means that kubelet always attempts to pull the latest image. Container will fail If the pull fails.\n - `\"IfNotPresent\"` means that kubelet pulls if the image isn't present on disk. Container will fail if the image isn't present and the pull fails.\n - `\"Never\"` means that kubelet never pulls an image, but only uses a local image. Container will fail if the image isn't present",
+      "description": "The ImagePullPolicy to use for user workload pods and their containers (launcher pods, exporter pods, etc.). For KubeVirt infrastructure images, use spec.imagePullPolicy instead.\n\nPossible enum values:\n - `\"Always\"` means that kubelet always attempts to pull the latest image. Container will fail If the pull fails.\n - `\"IfNotPresent\"` means that kubelet pulls if the image isn't present on disk. Container will fail if the image isn't present and the pull fails.\n - `\"Never\"` means that kubelet never pulls an image, but only uses a local image. Container will fail if the image isn't present",
       "type": "string",
       "enum": [
        "Always",
@@ -16137,8 +16150,12 @@
      "permittedHostDevices": {
       "$ref": "#/definitions/v1.PermittedHostDevices"
      },
+     "persistentReservationConfiguration": {
+      "description": "PersistentReservationConfiguration controls the deployment of additional resources required for using SCSI persistent reservation in VMs",
+      "$ref": "#/definitions/v1.PersistentReservationConfiguration"
+     },
      "roleAggregationStrategy": {
-      "description": "RoleAggregationStrategy controls whether RBAC cluster roles should be aggregated to the default Kubernetes roles (admin, edit, view). When set to \"AggregateToDefault\" (default) or not specified, the aggregate-to-* labels are added to the cluster roles. When set to \"Manual\", the labels are not added, and roles will not be aggregated to the default roles. Setting this field to \"Manual\" requires the OptOutRoleAggregation feature gate to be enabled. This is an Alpha feature and subject to change.",
+      "description": "RoleAggregationStrategy controls whether RBAC cluster roles should be aggregated to the default Kubernetes roles (admin, edit, view). When set to \"AggregateToDefault\" (default) or not specified, the aggregate-to-* labels are added to the cluster roles. When set to \"Manual\", the labels are not added, and roles will not be aggregated to the default roles. Setting RoleAggregationStrategy to \"Manual\" requires the OptOutRoleAggregation feature gate to be enabled (Beta, enabled by default since v1.9.0).",
       "type": "string"
      },
      "seccompConfiguration": {
@@ -16267,7 +16284,7 @@
       "$ref": "#/definitions/v1.CustomizeComponents"
      },
      "imagePullPolicy": {
-      "description": "The ImagePullPolicy to use.\n\nPossible enum values:\n - `\"Always\"` means that kubelet always attempts to pull the latest image. Container will fail If the pull fails.\n - `\"IfNotPresent\"` means that kubelet pulls if the image isn't present on disk. Container will fail if the image isn't present and the pull fails.\n - `\"Never\"` means that kubelet never pulls an image, but only uses a local image. Container will fail if the image isn't present",
+      "description": "The ImagePullPolicy to use for KubeVirt operator-managed infrastructure images (virt-api, virt-controller, virt-handler, virt-exportproxy, etc.). For pull policy of user workload pods, see spec.configuration.imagePullPolicy.\n\nPossible enum values:\n - `\"Always\"` means that kubelet always attempts to pull the latest image. Container will fail If the pull fails.\n - `\"IfNotPresent\"` means that kubelet pulls if the image isn't present on disk. Container will fail if the image isn't present and the pull fails.\n - `\"Never\"` means that kubelet never pulls an image, but only uses a local image. Container will fail if the image isn't present",
       "type": "string",
       "enum": [
        "Always",
@@ -16720,6 +16737,11 @@
       "description": "By default, the SELinux level of target virt-launcher pods is forced to the level of the source virt-launcher. When set to true, MatchSELinuxLevelOnMigration lets the CRI auto-assign a random level to the target. That will ensure the target virt-launcher doesn't share categories with another pod on the node. However, migrations will fail when using RWX volumes that don't automatically deal with SELinux levels.",
       "type": "boolean"
      },
+     "maxDowntimeMs": {
+      "description": "MaxDowntimeMs specifies the maximum tolerable downtime (in milliseconds) during switchover. Defaults to 900",
+      "type": "integer",
+      "format": "int64"
+     },
      "network": {
       "description": "Network is the name of the CNI network to use for live migrations. By default, migrations go through the pod network.",
       "type": "string"
@@ -16802,6 +16824,10 @@
      },
      "pod": {
       "$ref": "#/definitions/v1.PodNetwork"
+     },
+     "resourceClaim": {
+      "description": "ResourceClaim represents a network resource requested via a VMI spec.resourceClaims[] entry, backed by either a Kubernetes ResourceClaim or ResourceClaimTemplate. This field should only be configured if the NetworkDevicesWithDRA feature-gate is enabled. This feature is in alpha.",
+      "$ref": "#/definitions/v1.ClaimRequest"
      }
     }
    },
@@ -17043,6 +17069,15 @@
      }
     }
    },
+   "v1.PersistentReservationConfiguration": {
+    "type": "object",
+    "properties": {
+     "enabled": {
+      "description": "Enabled controls the deployment of additional resources like the pr-helper container for enabling the use of the SCSI persistent reservation VMs, defaults to False.",
+      "type": "boolean"
+     }
+    }
+   },
    "v1.PersistentVolumeClaimInfo": {
     "description": "PersistentVolumeClaimInfo contains the relavant information virt-handler needs cached about a PVC",
     "type": "object",
@@ -17169,6 +17204,34 @@
      "protocol": {
       "description": "Protocol for port. Must be UDP or TCP. Defaults to \"TCP\".",
       "type": "string"
+     }
+    }
+   },
+   "v1.PortRange": {
+    "description": "PortRange represents a range of ports to be forwarded to the virtual machine. All fields are mandatory.",
+    "type": "object",
+    "required": [
+     "protocol",
+     "start",
+     "end"
+    ],
+    "properties": {
+     "end": {
+      "description": "Last port of the range to expose for the virtual machine. This must be a valid port number, 0 \u003c x \u003c 65536. Must be greater than or equal to start.",
+      "type": "integer",
+      "format": "int32",
+      "default": 0
+     },
+     "protocol": {
+      "description": "Required. Must be UDP or TCP.",
+      "type": "string",
+      "default": ""
+     },
+     "start": {
+      "description": "First port of the range to expose for the virtual machine. This must be a valid port number, 0 \u003c x \u003c 65536.",
+      "type": "integer",
+      "format": "int32",
+      "default": 0
      }
     }
    },
@@ -17683,6 +17746,46 @@
      }
     }
    },
+   "v1.StallDetectorOptions": {
+    "type": "object",
+    "properties": {
+     "completionTimeoutFactor": {
+      "description": "CompletionTimeoutFactor multiplies the computed migration completion timeout to determine the total time budget for deciding whether a forced switchover can still finish in time, and to extend the abort deadline after initiating a completion-timeout-driven switchover. Defaults to \"2\".",
+      "type": "string"
+     },
+     "ewmaAlpha": {
+      "description": "EwmaAlpha is the smoothing factor for the exponentially weighted moving average of observed migration bandwidth. Must be in the range (0, 1]; zero is invalid because the estimate would never incorporate new samples. Higher values weight recent samples more heavily. Defaults to \"0.4\".",
+      "type": "string"
+     },
+     "patienceWindowDecayFactor": {
+      "description": "PatienceWindowDecayFactor is the factor by which the relaxation patience window is multiplied after each best-remaining-bytes relaxation step. Defaults to \"0.5\".",
+      "type": "string"
+     },
+     "precopyPossibleFactor": {
+      "description": "PrecopyPossibleFactor is the maximum factor by which estimated downtime may exceed MaxDowntime while still attempting a soft stop-and-copy instead of aborting the migration. Defaults to \"1.5\".",
+      "type": "string"
+     },
+     "searchLocalMinima": {
+      "description": "SearchLocalMinima controls whether convergence actions are delayed until remaining bytes reach a local minimum near the best observed value. When false, actions may trigger as soon as a stall is detected. Defaults to true.",
+      "type": "boolean"
+     },
+     "stallMargin": {
+      "description": "StallMargin is the fractional tolerance, expressed as a percentage, used when comparing remaining migration bytes against the best observed value to detect stalls and local minima. A stall is reported when remaining bytes stay above (1 - StallMargin/100) of the outside-window minimum. Defaults to 4.",
+      "type": "integer",
+      "format": "int64"
+     },
+     "stallProgressTimeout": {
+      "description": "StallProgressTimeout is the duration in seconds of the sliding window used to track minimum remaining-bytes and detect when migration progress has stalled. Defaults to 40.",
+      "type": "integer",
+      "format": "int64"
+     },
+     "switchoverTimeout": {
+      "description": "SwitchoverTimeout is the duration in seconds allowed for a stop-and-copy or post-copy switchover to complete after being triggered before the migration is aborted. Defaults to 60.",
+      "type": "integer",
+      "format": "int64"
+     }
+    }
+   },
    "v1.StartOptions": {
     "description": "StartOptions may be provided on start request.",
     "type": "object",
@@ -18083,6 +18186,82 @@
     "properties": {
      "display": {
       "$ref": "#/definitions/v1.VGPUDisplayOptions"
+     }
+    }
+   },
+   "v1.VMIMConfigurationOptions": {
+    "description": "VMIMConfigurationOptions holds the resolved migration options for a single migration. It is written to VirtualMachineInstanceMigrationState and represents the effective configuration after merging KubeVirt defaults with any matched MigrationPolicy.",
+    "type": "object",
+    "properties": {
+     "allowAutoConverge": {
+      "description": "AllowAutoConverge allows the platform to compromise performance/availability of VMIs to guarantee successful VMI live migrations. Defaults to false",
+      "type": "boolean"
+     },
+     "allowPostCopy": {
+      "description": "AllowPostCopy enables post-copy live migrations. Such migrations allow even the busiest VMIs to successfully live-migrate. However, events like a network failure can cause a VMI crash. If set to true, migrations will still start in pre-copy, but switch to post-copy when CompletionTimeoutPerGiB triggers. Defaults to false",
+      "type": "boolean"
+     },
+     "allowWorkloadDisruption": {
+      "description": "AllowWorkloadDisruption indicates that the migration shouldn't be canceled after acceptableCompletionTime is exceeded. Instead, if permitted, migration will be switched to post-copy or the VMI will be paused to allow the migration to complete",
+      "type": "boolean"
+     },
+     "bandwidthPerMigration": {
+      "description": "BandwidthPerMigration limits the amount of network bandwidth live migrations are allowed to use. The value is in quantity per second. Defaults to 0 (no limit)",
+      "$ref": "#/definitions/k8s.io.apimachinery.pkg.api.resource.Quantity"
+     },
+     "completionTimeoutPerGiB": {
+      "description": "CompletionTimeoutPerGiB is the maximum number of seconds per GiB a migration is allowed to take. If the timeout is reached, the migration will be either paused, switched to post-copy or cancelled depending on other settings. Defaults to 150",
+      "type": "integer",
+      "format": "int64"
+     },
+     "disableTLS": {
+      "description": "When set to true, DisableTLS will disable the additional layer of live migration encryption provided by KubeVirt. This is usually a bad idea. Defaults to false",
+      "type": "boolean"
+     },
+     "experimental": {
+      "description": "ExperimentalMigrationOptions is an alpha API. It is intended for experimental purposes only and will be removed in the future.",
+      "$ref": "#/definitions/v1.ExperimentalMigrationOptions"
+     },
+     "matchSELinuxLevelOnMigration": {
+      "description": "By default, the SELinux level of target virt-launcher pods is forced to the level of the source virt-launcher. When set to true, MatchSELinuxLevelOnMigration lets the CRI auto-assign a random level to the target. That will ensure the target virt-launcher doesn't share categories with another pod on the node. However, migrations will fail when using RWX volumes that don't automatically deal with SELinux levels.",
+      "type": "boolean"
+     },
+     "maxDowntimeMs": {
+      "description": "MaxDowntimeMs specifies the maximum tolerable downtime (in milliseconds) during switchover. Defaults to 900",
+      "type": "integer",
+      "format": "int64"
+     },
+     "network": {
+      "description": "Network is the name of the CNI network to use for live migrations. By default, migrations go through the pod network.",
+      "type": "string"
+     },
+     "nodeDrainTaintKey": {
+      "description": "NodeDrainTaintKey defines the taint key that indicates a node should be drained. Note: this option relies on the deprecated node taint feature. Default: kubevirt.io/drain",
+      "type": "string"
+     },
+     "parallelMigrationsPerCluster": {
+      "description": "ParallelMigrationsPerCluster is the total number of concurrent live migrations allowed cluster-wide. Defaults to 5",
+      "type": "integer",
+      "format": "int64"
+     },
+     "parallelOutboundMigrationsPerNode": {
+      "description": "ParallelOutboundMigrationsPerNode is the maximum number of concurrent outgoing live migrations allowed per node. Defaults to 2",
+      "type": "integer",
+      "format": "int64"
+     },
+     "progressTimeout": {
+      "description": "ProgressTimeout is the maximum number of seconds a live migration is allowed to make no progress. Hitting this timeout means a migration transferred 0 data for that many seconds. The migration is then considered stuck and therefore cancelled. Defaults to 150",
+      "type": "integer",
+      "format": "int64"
+     },
+     "unsafeMigrationOverride": {
+      "description": "UnsafeMigrationOverride allows live migrations to occur even if the compatibility check indicates the migration will be unsafe to the guest. Defaults to false",
+      "type": "boolean"
+     },
+     "utilityVolumesTimeout": {
+      "description": "UtilityVolumesTimeout is the maximum number of seconds a migration can wait in Pending state for utility volumes to be detached. If utility volumes are still present after this timeout, the migration will be marked as Failed. Defaults to 150",
+      "type": "integer",
+      "format": "int64"
      }
     }
    },
@@ -18517,6 +18696,10 @@
       "description": "Failed indicates that the backup failed",
       "type": "boolean"
      },
+     "quiesceStatus": {
+      "description": "QuiesceStatus indicates whether filesystem freeze succeeded, failed, or was skipped.",
+      "type": "string"
+     },
      "startTimestamp": {
       "description": "StartTimestamp is the timestamp when the backup started",
       "$ref": "#/definitions/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
@@ -18526,9 +18709,23 @@
       "type": "array",
       "items": {
        "default": {},
-       "$ref": "#/definitions/v1alpha1.BackupVolumeInfo"
+       "$ref": "#/definitions/v1.VirtualMachineInstanceBackupVolumeInfo"
       },
       "x-kubernetes-list-type": "atomic"
+     }
+    }
+   },
+   "v1.VirtualMachineInstanceBackupVolumeInfo": {
+    "description": "VirtualMachineInstanceBackupVolumeInfo contains information about a volume included in a backup",
+    "type": "object",
+    "required": [
+     "volumeName"
+    ],
+    "properties": {
+     "volumeName": {
+      "description": "VolumeName is the volume name from VMI spec",
+      "type": "string",
+      "default": ""
      }
     }
    },
@@ -19072,7 +19269,7 @@
      },
      "migrationConfiguration": {
       "description": "Migration configurations to apply",
-      "$ref": "#/definitions/v1.MigrationConfiguration"
+      "$ref": "#/definitions/v1.VMIMConfigurationOptions"
      },
      "migrationNetworkType": {
       "description": "The type of migration network, either 'pod' or 'migration'",
@@ -19586,6 +19783,27 @@
      }
     }
    },
+   "v1.VirtualMachineInstanceResourceClaim": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "description": "Name uniquely identifies this resource claim inside the VMI. This field is required and must be a DNS_LABEL.",
+      "type": "string",
+      "default": ""
+     },
+     "resourceClaimName": {
+      "description": "ResourceClaimName is the name of a ResourceClaim object in the same namespace as this VMI.\n\nExactly one of ResourceClaimName and ResourceClaimTemplateName must be set.",
+      "type": "string"
+     },
+     "resourceClaimTemplateName": {
+      "description": "ResourceClaimTemplateName is the name of a ResourceClaimTemplate object in the same namespace as this VMI.\n\nThe template name is passed through to the generated virt-launcher Pod spec. From the Pod spec, the template is used to create a new ResourceClaim, which is bound to the virt-launcher Pod. When the virt-launcher Pod is deleted, the ResourceClaim is also deleted. The generated ResourceClaim name is unique and is recorded in pod.status.resourceClaimStatuses.\n\nExactly one of ResourceClaimName and ResourceClaimTemplateName must be set.",
+      "type": "string"
+     }
+    }
+   },
    "v1.VirtualMachineInstanceSpec": {
     "description": "VirtualMachineInstanceSpec is a description of a VirtualMachineInstance.",
     "type": "object",
@@ -19666,11 +19884,11 @@
       "$ref": "#/definitions/v1.Probe"
      },
      "resourceClaims": {
-      "description": "ResourceClaims define which ResourceClaims must be allocated and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources will be made available to the domain which consumes them by name.\n\nThis is an alpha field and requires enabling the DynamicResourceAllocation feature gate in kubernetes\n https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/\nThis field should only be configured if one of the feature-gates GPUsWithDRA or HostDevicesWithDRA is enabled. This feature is in alpha.",
+      "description": "ResourceClaims define which ResourceClaims must be allocated and reserved before the VMI, hence virt-launcher pod is allowed to start. The resources will be made available to the domain which consumes them by name.\n\nThis is an alpha field and requires enabling the DynamicResourceAllocation feature gate in kubernetes\n https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/\nThis field should only be configured if one of the feature-gates GPUsWithDRA, HostDevicesWithDRA, or NetworkDevicesWithDRA is enabled. This feature is in alpha.",
       "type": "array",
       "items": {
        "default": {},
-       "$ref": "#/definitions/k8s.io.api.core.v1.PodResourceClaim"
+       "$ref": "#/definitions/v1.VirtualMachineInstanceResourceClaim"
       },
       "x-kubernetes-list-map-keys": [
        "name"
@@ -19679,6 +19897,10 @@
      },
      "schedulerName": {
       "description": "If specified, the VMI will be dispatched by specified scheduler. If not specified, the VMI will be dispatched by default scheduler.",
+      "type": "string"
+     },
+     "serviceAccountName": {
+      "description": "ServiceAccountName is the name of the ServiceAccount to use to run the virt-launcher pod. This sets pod.spec.serviceAccountName but does NOT automatically expose the service account token to the VM guest. To expose the token to the VM, use a serviceAccount volume.",
       "type": "string"
      },
      "startStrategy": {
@@ -20386,7 +20608,7 @@
       "type": "string"
      },
      "volumes": {
-      "description": "Volumes lists volumes and their disk targets at backup time",
+      "description": "Volumes lists volumes included in the backup",
       "type": "array",
       "items": {
        "default": {},
@@ -20442,18 +20664,12 @@
     "description": "BackupVolumeInfo contains information about a volume included in a backup",
     "type": "object",
     "required": [
-     "volumeName",
-     "diskTarget"
+     "volumeName"
     ],
     "properties": {
      "dataEndpoint": {
       "description": "DataEndpoint is the URL of the endpoint for read for pull mode",
       "type": "string"
-     },
-     "diskTarget": {
-      "description": "DiskTarget is the disk target device name at backup time",
-      "type": "string",
-      "default": ""
      },
      "mapEndpoint": {
       "description": "MapEndpoint is the URL of the endpoint for map for pull mode",
@@ -20543,6 +20759,14 @@
       "$ref": "#/definitions/k8s.io.apimachinery.pkg.api.resource.Quantity"
      },
      "completionTimeoutPerGiB": {
+      "type": "integer",
+      "format": "int64"
+     },
+     "experimental": {
+      "description": "ExperimentalMigrationOptions is an alpha API. It is intended for experimental purposes only and will be removed in the future.",
+      "$ref": "#/definitions/v1.ExperimentalMigrationOptions"
+     },
+     "maxDowntimeMs": {
       "type": "integer",
       "format": "int64"
      },
@@ -20692,6 +20916,10 @@
      },
      "endpointCert": {
       "description": "EndpointCert is the raw CACert that is to be used when connecting to an exported backup endpoint in pull mode.",
+      "type": "string"
+     },
+     "exportUID": {
+      "description": "ExportUID tracks the UID of the associated VMExport for pull-mode backups used to detect VMExport recreation and re-initiate the export handshake",
       "type": "string"
      },
      "includedVolumes": {
@@ -21972,7 +22200,7 @@
       "type": "string"
      },
      "launchSecurity": {
-      "description": "Optionally defines the LaunchSecurity to be used by the instancetype.",
+      "description": "Optionally defines the LaunchSecurity to be used by the instancetype.\n\nDeprecated: Will be removed with v1beta2 or v1",
       "$ref": "#/definitions/v1.LaunchSecurity"
      },
      "memory": {
@@ -22390,6 +22618,10 @@
      "preferredArchitecture": {
       "description": "PreferredArchitecture defines a prefeerred architecture for the VirtualMachine",
       "type": "string"
+     },
+     "preferredLaunchSecurity": {
+      "description": "Optionally defines the preferred LaunchSecurity",
+      "$ref": "#/definitions/v1.LaunchSecurity"
      },
      "preferredSubdomain": {
       "description": "Subdomain of the VirtualMachineInstance",

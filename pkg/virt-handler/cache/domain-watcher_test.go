@@ -20,14 +20,17 @@
 package cache
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/watch"
-	k8scache "k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/record"
+
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 )
 
 var _ = Describe("Domain Watcher", func() {
@@ -62,45 +65,118 @@ var _ = Describe("Domain Watcher", func() {
 			notifyServerMaxConsecutiveFails = 1
 			notifyServerHealthyRunTime = 1 * time.Hour
 
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			d := &domainWatcher{
-				virtShareDir:        GinkgoT().TempDir(),
-				watchdogTimeout:     10,
 				unresponsiveSockets: make(map[string]int64),
-				resyncPeriod:        1 * time.Hour,
-				runServer: func(string, chan struct{}, chan watch.Event, record.EventRecorder, k8scache.Store, ...time.Duration) error {
-					return fmt.Errorf("permanent failure")
-				},
-				eventChan: make(chan watch.Event, 100),
-				stopChan:  make(chan struct{}),
+				consecutiveFails:    new(int),
+				result:              make(chan watch.Event, 100),
+				cancel:              cancel,
 			}
 			d.wg.Add(1)
 
-			Expect(d.worker).To(PanicWith(
+			runServer := func(_ context.Context, _ chan watch.Event) error {
+				return fmt.Errorf("permanent failure")
+			}
+			Expect(func() { d.worker(ctx, runServer, 1*time.Hour, 10) }).To(PanicWith(
 				ContainSubstring("domain notify server reached max consecutive failures")))
 		})
 	})
 
 	Context("Stop() idempotency", func() {
 		It("should not panic when Stop is called twice", func() {
-			d := &domainWatcher{
-				virtShareDir:        GinkgoT().TempDir(),
-				watchdogTimeout:     1,
-				unresponsiveSockets: make(map[string]int64),
-				resyncPeriod:        1 * time.Hour,
-				runServer: func(string, chan struct{}, chan watch.Event, record.EventRecorder, k8scache.Store, ...time.Duration) error {
+			d := newDomainWatcher(
+				context.Background(),
+				func(context.Context, chan watch.Event) error {
 					return fmt.Errorf("injected error")
 				},
+				1,
+				1*time.Hour,
+				nil,
+				new(int),
+			)
+
+			Eventually(d.result).Should(BeClosed())
+
+			Expect(func() { d.Stop() }).ShouldNot(Panic())
+			Expect(func() { d.Stop() }).ShouldNot(Panic())
+		})
+	})
+
+	Context("listAllKnownDomains", func() {
+		var ghostCacheDir string
+
+		BeforeEach(func() {
+			ghostCacheDir = GinkgoT().TempDir()
+			InitializeGhostRecordCache(NewIterableCheckpointManager(ghostCacheDir))
+		})
+
+		It("should return domain with Unknown status when socket exists but connection fails", func() {
+			socketDir := GinkgoT().TempDir()
+			socketPath := filepath.Join(socketDir, "cmd.sock")
+
+			err := os.WriteFile(socketPath, []byte{}, 0600)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = GhostRecordGlobalStore.Add("test-ns", "test-vmi", socketPath, "uid-1234")
+			Expect(err).ToNot(HaveOccurred())
+
+			domains, err := listAllKnownDomains()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(domains).To(HaveLen(1))
+			Expect(domains[0].ObjectMeta.Namespace).To(Equal("test-ns"))
+			Expect(domains[0].ObjectMeta.Name).To(Equal("test-vmi"))
+			Expect(domains[0].ObjectMeta.UID).To(BeEquivalentTo("uid-1234"))
+			Expect(domains[0].Status.Status).To(Equal(api.Unknown))
+			Expect(domains[0].ObjectMeta.DeletionTimestamp).To(BeNil())
+		})
+
+		It("should return domain with DeletionTimestamp when socket file does not exist", func() {
+			socketPath := "/nonexistent/path/cmd.sock"
+
+			err := GhostRecordGlobalStore.Add("test-ns", "test-vmi", socketPath, "uid-1234")
+			Expect(err).ToNot(HaveOccurred())
+
+			domains, err := listAllKnownDomains()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(domains).To(HaveLen(1))
+			Expect(domains[0].ObjectMeta.Namespace).To(Equal("test-ns"))
+			Expect(domains[0].ObjectMeta.Name).To(Equal("test-vmi"))
+			Expect(domains[0].ObjectMeta.DeletionTimestamp).ToNot(BeNil())
+		})
+
+		It("should handle mix of reachable, unreachable, and missing sockets", func() {
+			socketDir := GinkgoT().TempDir()
+
+			unreachablePath := filepath.Join(socketDir, "unreachable.sock")
+			err := os.WriteFile(unreachablePath, []byte{}, 0600)
+			Expect(err).ToNot(HaveOccurred())
+			err = GhostRecordGlobalStore.Add("ns1", "unreachable-vmi", unreachablePath, "uid-1")
+			Expect(err).ToNot(HaveOccurred())
+
+			missingPath := filepath.Join(socketDir, "missing.sock")
+			err = GhostRecordGlobalStore.Add("ns2", "missing-vmi", missingPath, "uid-2")
+			Expect(err).ToNot(HaveOccurred())
+
+			domains, err := listAllKnownDomains()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(domains).To(HaveLen(2))
+
+			var unknownDomain, deletedDomain *api.Domain
+			for _, d := range domains {
+				if d.Status.Status == api.Unknown {
+					unknownDomain = d
+				}
+				if d.ObjectMeta.DeletionTimestamp != nil {
+					deletedDomain = d
+				}
 			}
 
-			Expect(d.startBackground()).To(Succeed())
-			Eventually(func() bool {
-				d.lock.Lock()
-				defer d.lock.Unlock()
-				return !d.backgroundWatcherStarted
-			}, 5*time.Second).Should(BeTrue())
+			Expect(unknownDomain).ToNot(BeNil())
+			Expect(unknownDomain.ObjectMeta.Name).To(Equal("unreachable-vmi"))
 
-			Expect(func() { d.Stop() }).ShouldNot(Panic())
-			Expect(func() { d.Stop() }).ShouldNot(Panic())
+			Expect(deletedDomain).ToNot(BeNil())
+			Expect(deletedDomain.ObjectMeta.Name).To(Equal("missing-vmi"))
 		})
 	})
 })

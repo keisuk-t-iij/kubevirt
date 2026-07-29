@@ -70,7 +70,7 @@ var _ = Describe(SIG("Port-forward", func() {
 			libnet.SkipWhenClusterNotSupportIPFamily(ipFamily)
 
 			if ipFamily == k8sv1.IPv6Protocol {
-				Skip(skipIPv6Message)
+				Skip(skipIPv6Message) //nolint:forbidigo
 			}
 
 			vmi := createAlpineVMIWithPortsAndBlockUntilReady(virtClient, vmiDeclaredPorts)
@@ -167,7 +167,11 @@ func killPortForwardCommand(portForwardCmd *exec.Cmd) error {
 func createAlpineVMIWithPortsAndBlockUntilReady(virtClient kubecli.KubevirtClient, ports []v1.Port) *v1.VirtualMachineInstance {
 	vmi := libvmifact.NewAlpineWithTestTooling(
 		libvmi.WithNetwork(v1.DefaultPodNetwork()),
-		libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding(ports...)),
+		libvmi.WithInterface(libvmi.NewInterface(
+			v1.DefaultPodNetwork().Name,
+			libvmi.WithMasqueradeBinding(),
+			libvmi.WithPorts(ports...),
+		)),
 	)
 
 	vmi, err := virtClient.VirtualMachineInstance(testsuite.NamespaceTestDefault).Create(context.Background(), vmi, metav1.CreateOptions{})

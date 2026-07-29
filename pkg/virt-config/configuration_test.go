@@ -742,6 +742,56 @@ var _ = Describe("test configuration", func() {
 		Entry("is enabled it should result in cluster profiler being enabled", &v1.DeveloperConfiguration{ClusterProfiler: true}, true),
 	)
 
+	DescribeTable("when PersistentReservation config", func(config *v1.KubeVirtConfiguration, isEnabled bool) {
+		clusterConfig, _, _ := testutils.NewFakeClusterConfigUsingKVConfig(config)
+
+		Expect(clusterConfig.PersistentReservationEnabled()).To(Equal(isEnabled))
+	},
+		Entry("is set to false should result in persistent reservation being disabled",
+			&v1.KubeVirtConfiguration{
+				PersistentReservationConfiguration: &v1.PersistentReservationConfiguration{
+					Enabled: pointer.P(false),
+				},
+			}, false),
+		Entry("is empty should result in persistent reservation being disabled",
+			&v1.KubeVirtConfiguration{
+				PersistentReservationConfiguration: &v1.PersistentReservationConfiguration{},
+			}, false),
+		Entry("is unset should result in persistent reservation being disabled",
+			&v1.KubeVirtConfiguration{
+				PersistentReservationConfiguration: nil,
+			}, false),
+		Entry("is enabled should result in persistent reservation being enabled",
+			&v1.KubeVirtConfiguration{
+				PersistentReservationConfiguration: &v1.PersistentReservationConfiguration{
+					Enabled: pointer.P(true),
+				},
+			}, true),
+		Entry("is enabled by feature gate should result in persistent reservation being enabled",
+			&v1.KubeVirtConfiguration{
+				DeveloperConfiguration: &v1.DeveloperConfiguration{
+					FeatureGates: []string{featuregate.PersistentReservation},
+				},
+				PersistentReservationConfiguration: &v1.PersistentReservationConfiguration{},
+			}, true),
+		Entry("is enabled by feature gate with unset persistent reservation configuration should result in persistent reservation being enabled",
+			&v1.KubeVirtConfiguration{
+				DeveloperConfiguration: &v1.DeveloperConfiguration{
+					FeatureGates: []string{featuregate.PersistentReservation},
+				},
+				PersistentReservationConfiguration: nil,
+			}, true),
+		Entry("is enabled by feature gate with disabled persistent reservation configuration should result in persistent reservation being disabled",
+			&v1.KubeVirtConfiguration{
+				DeveloperConfiguration: &v1.DeveloperConfiguration{
+					FeatureGates: []string{featuregate.PersistentReservation},
+				},
+				PersistentReservationConfiguration: &v1.PersistentReservationConfiguration{
+					Enabled: pointer.P(false),
+				},
+			}, false),
+	)
+
 	Context("GAed feature gates should be considered as enabled by default", func() {
 		var clusterConfig *virtconfig.ClusterConfig
 
@@ -1009,4 +1059,19 @@ var _ = Describe("test configuration", func() {
 			Entry("should return hyperv-direct when feature gate is enabled with hyperv config", true, &HyperVDirectHypervisorConfig, v1.HyperVDirectHypervisorName),
 		)
 	})
+
+	DescribeTable("ParseFactor", func(value string, precision int, expected float64, expectError bool) {
+		result, err := virtconfig.ParseFactor(value, precision)
+		if expectError {
+			Expect(err).To(HaveOccurred())
+			return
+		}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(expected))
+	},
+		Entry("accepts integer factor", "2", 3, 2.0, false),
+		Entry("accepts decimal within precision", "1.5", 1, 1.5, false),
+		Entry("rejects too many decimal places", "1.55", 1, 0.0, true),
+		Entry("accepts exponential notation when value fits precision", "1.5e1", 0, 15.0, false),
+	)
 })

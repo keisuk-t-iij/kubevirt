@@ -176,35 +176,36 @@ func (m *StorageManager) backup(vmi *v1.VirtualMachineInstance, backupOptions *b
 		backupMetadata.Volumes = string(volumesJSON)
 	})
 
-	frozenFS := false
 	if !backupOptions.SkipQuiesce {
 		logger.Info("Freezing VMI to capture backup state")
-		if err := dom.FSFreeze(nil, 0); err != nil {
+		if err := m.FreezeVMI(vmi, 0); err != nil {
 			logger.Warningf(freezeFailedMsg, err)
 			m.metadataCache.Backup.WithSafeBlock(func(backupMetadata *api.BackupMetadata, _ bool) {
-				backupMetadata.BackupMsg = fmt.Sprintf(freezeFailedMsg, err)
+				backupMetadata.QuiesceStatus = string(backupv1.QuiesceFailed)
+				backupMetadata.BackupMsg = err.Error()
 			})
 		} else {
-			frozenFS = true
+			m.metadataCache.Backup.WithSafeBlock(func(backupMetadata *api.BackupMetadata, _ bool) {
+				backupMetadata.QuiesceStatus = string(backupv1.QuiesceSucceeded)
+			})
 		}
-	}
 
-	defer func() {
-		if frozenFS {
+		defer func() {
 			logger.Info("Thawing VMI after backup job started")
-			if err := dom.FSThaw(nil, 0); err != nil {
+			if err := m.UnfreezeVMI(vmi); err != nil {
 				logger.Reason(err).Error(unfreezeFailedMsg)
-				m.metadataCache.Backup.WithSafeBlock(func(backupMetadata *api.BackupMetadata, _ bool) {
-					backupMetadata.BackupMsg = unfreezeFailedMsg
-				})
 			}
-		}
-	}()
+		}()
+	} else {
+		m.metadataCache.Backup.WithSafeBlock(func(backupMetadata *api.BackupMetadata, _ bool) {
+			backupMetadata.QuiesceStatus = string(backupv1.QuiesceSkipped)
+		})
+	}
 
 	return dom.BackupBegin(strings.ToLower(string(backupXML)), strings.ToLower(string(checkpointXML)), 0)
 }
 
-func generateDomainBackup(disks []api.Disk, backupOptions *backupv1.BackupOptions, backupPath string) (*api.DomainBackup, *api.DomainCheckpoint, []backupv1.BackupVolumeInfo) {
+func generateDomainBackup(disks []api.Disk, backupOptions *backupv1.BackupOptions, backupPath string) (*api.DomainBackup, *api.DomainCheckpoint, []v1.VirtualMachineInstanceBackupVolumeInfo) {
 	domainBackup := &api.DomainBackup{
 		Mode: string(backupOptions.Mode),
 	}
@@ -222,7 +223,7 @@ func generateDomainBackup(disks []api.Disk, backupOptions *backupv1.BackupOption
 	checkpointName := fmt.Sprintf("%s-%s", backupOptions.BackupName, backupTime)
 	backupDisks := &api.BackupDisks{}
 	checkpointDisks := &api.CheckpointDisks{}
-	var backupVolumesInfo []backupv1.BackupVolumeInfo
+	var backupVolumesInfo []v1.VirtualMachineInstanceBackupVolumeInfo
 	// the name of the volume should match the alias
 	for _, disk := range disks {
 		if disk.Target.Device == "" {
@@ -246,9 +247,8 @@ func generateDomainBackup(disks []api.Disk, backupOptions *backupv1.BackupOption
 				setBackupDiskTargetPath(&backupDisk, backupOptions, volumeName, backupPath)
 			}
 			checkpointDisk.Checkpoint = "bitmap"
-			backupVolumesInfo = append(backupVolumesInfo, backupv1.BackupVolumeInfo{
+			backupVolumesInfo = append(backupVolumesInfo, v1.VirtualMachineInstanceBackupVolumeInfo{
 				VolumeName: volumeName,
-				DiskTarget: disk.Target.Device,
 			})
 		} else {
 			backupDisk.Backup = "no"
@@ -414,9 +414,6 @@ func (m *StorageManager) initiateBackupTunnel(backupOptions *backupv1.BackupOpti
 	defer m.backupTunnelMu.Unlock()
 
 	backupSock := filepath.Join(pullBackupSocketDir, pullBackupSocketName)
-	if _, err := os.Stat(backupSock); err != nil {
-		return fmt.Errorf("cannot initialize backup tunnel: %w", err)
-	}
 
 	if m.activeBackupTunnel != nil {
 		if m.activeBackupTunnel.IsMatch(backupOptions.BackupName, backupOptions.BackupStartTime) {
@@ -437,7 +434,7 @@ func (m *StorageManager) initiateBackupTunnel(backupOptions *backupv1.BackupOpti
 		m.registerNBD,
 	)
 	if err := tunnel.Start(); err != nil {
-		return fmt.Errorf("failed to initialize backup tunnel: %w", err)
+		return err
 	}
 
 	m.activeBackupTunnel = tunnel
@@ -565,6 +562,10 @@ func hasBitmap(bitmapsByFile map[string][]qmpBitmapInfo, filePath, bitmapName st
 	}
 	for _, bm := range bitmaps {
 		if bm.Name == bitmapName {
+			if bm.Inconsistent {
+				log.Log.Warningf("Bitmap %s on %s is inconsistent (possibly from failed migration), treating as absent", bitmapName, filePath)
+				return false
+			}
 			return true
 		}
 	}
@@ -572,7 +573,8 @@ func hasBitmap(bitmapsByFile map[string][]qmpBitmapInfo, filePath, bitmapName st
 }
 
 type qmpBitmapInfo struct {
-	Name string `json:"name"`
+	Name         string `json:"name"`
+	Inconsistent bool   `json:"inconsistent,omitempty"`
 }
 
 type qmpBlockNodeInfo struct {

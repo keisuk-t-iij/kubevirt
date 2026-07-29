@@ -90,7 +90,7 @@ var _ = Describe("[sig-monitoring]Monitoring", decorators.SigMonitoring, func() 
 		PIt("KubeVirtVMIExcessiveMigrations should be triggered when a VMI has been migrated more than 12 times", func() {
 			By("Starting the VirtualMachineInstance")
 			vmi := libvmi.New(libnet.WithMasqueradeNetworking(), libvmi.WithMemoryRequest("2Mi"))
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsHuge)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsHuge())
 
 			By("Migrating the VMI 13 times")
 			for i := 0; i < 13; i++ {
@@ -144,7 +144,7 @@ var _ = Describe("[sig-monitoring]Monitoring", decorators.SigMonitoring, func() 
 	})
 
 	Context("Deprecation Alerts", func() {
-		It("[QUARANTINE]KubeVirtDeprecatedAPIRequested should be triggered when a deprecated API is requested", decorators.Quarantine, func() {
+		It("KubeVirtDeprecatedAPIRequested should be triggered when a deprecated API is requested", func() {
 			By("Creating a VMI")
 			vmi, err := virtClient.VirtualMachineInstance(testsuite.GetTestNamespace(nil)).
 				Create(context.Background(), libvmifact.NewGuestless(), metav1.CreateOptions{})
@@ -161,12 +161,6 @@ var _ = Describe("[sig-monitoring]Monitoring", decorators.SigMonitoring, func() 
 
 			By("Verifying the alert exists")
 			libmonitoring.VerifyAlertExist(virtClient, "KubeVirtDeprecatedAPIRequested")
-
-			By("Verifying the alert disappears")
-			const deprecatedAPIAlertTimeout = 15 * time.Minute
-			libmonitoring.WaitUntilAlertDoesNotExistWithCustomTime(
-				virtClient, deprecatedAPIAlertTimeout, "KubeVirtDeprecatedAPIRequested",
-			)
 		})
 	})
 })

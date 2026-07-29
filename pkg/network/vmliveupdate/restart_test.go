@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	k8sv1 "k8s.io/api/core/v1"
 	v1 "kubevirt.io/api/core/v1"
 
 	"kubevirt.io/kubevirt/pkg/libvmi"
@@ -36,15 +37,14 @@ var _ = Describe("IsRestartRequired", func() {
 		secondaryNetName1 = "foo"
 		secondaryNADName1 = "foo-nad"
 
-		secondaryNetName2       = "bar"
-		secondaryNADName2       = "bar-nad"
-		liveUpdateNADRefEnabled = true
+		secondaryNetName2 = "bar"
+		secondaryNADName2 = "bar-nad"
 	)
 
 	DescribeTable("should not require restart when there is no change", func(vmi *v1.VirtualMachineInstance) {
 		vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeFalse())
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeFalse())
 	},
 		Entry("Without interfaces and networks",
 			libvmi.New(libvmi.WithAutoAttachPodInterface(false))),
@@ -74,7 +74,7 @@ var _ = Describe("IsRestartRequired", func() {
 			vm.Spec.Template.Spec.Networks,
 			*libvmi.MultusNetwork(secondaryNetName1, secondaryNADName1),
 		)
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeFalse())
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeFalse())
 	})
 
 	DescribeTable("should not require restart when interface state changes", func(current, desired v1.InterfaceState) {
@@ -89,7 +89,7 @@ var _ = Describe("IsRestartRequired", func() {
 		vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
 		vm.Spec.Template.Spec.Domain.Devices.Interfaces[0].State = desired
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeFalse())
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeFalse())
 	},
 		Entry("From empty to empty", v1.InterfaceState(""), v1.InterfaceState("")),
 		Entry("From empty to absent", v1.InterfaceState(""), v1.InterfaceStateAbsent),
@@ -105,9 +105,7 @@ var _ = Describe("IsRestartRequired", func() {
 		Entry("From down to down", v1.InterfaceStateLinkDown, v1.InterfaceStateLinkDown),
 	)
 
-	DescribeTable("should not require restart when secondary NICs are hotplugged", func(
-		isliveUpdateNADRefEnabled bool,
-	) {
+	It("should not require restart when secondary NICs are hotplugged", func() {
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -132,14 +130,10 @@ var _ = Describe("IsRestartRequired", func() {
 
 		vm.Spec.Template.Spec.Networks = append(vm.Spec.Template.Spec.Networks, netsToHotplug...)
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{isliveUpdateNADRefEnabled})).To(BeFalse())
-	},
-		Entry("With FG enabled", liveUpdateNADRefEnabled),
-		Entry("With FG disabled", !liveUpdateNADRefEnabled))
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeFalse())
+	})
 
-	DescribeTable("should not require restart when interfaces or networks order is changed", func(
-		isliveUpdateNADRefEnabled bool,
-	) {
+	It("should not require restart when interfaces or networks order is changed", func() {
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetName1)),
@@ -154,11 +148,8 @@ var _ = Describe("IsRestartRequired", func() {
 		slices.Reverse(vm.Spec.Template.Spec.Domain.Devices.Interfaces)
 		slices.Reverse(vm.Spec.Template.Spec.Networks)
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeFalse())
-	},
-		Entry("With FG enabled", liveUpdateNADRefEnabled),
-		Entry("With FG disabled", !liveUpdateNADRefEnabled),
-	)
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeFalse())
+	})
 
 	It("should require restart when interface binding changes", func() {
 		iface := libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetName1)
@@ -171,13 +162,12 @@ var _ = Describe("IsRestartRequired", func() {
 		vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
 		vm.Spec.Template.Spec.Domain.Devices.Interfaces[0] = libvmi.InterfaceDeviceWithMasqueradeBinding()
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeTrue())
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeTrue())
 	})
 
 	DescribeTable("should require restart when network source changes", func(
 		current,
 		desired v1.Network,
-		liveUpdateNADRefEnabled bool,
 	) {
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
@@ -187,37 +177,37 @@ var _ = Describe("IsRestartRequired", func() {
 		vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
 		vm.Spec.Template.Spec.Networks[0] = desired
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{liveUpdateNADRefEnabled})).To(BeTrue())
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeTrue())
 	},
-		Entry("From Pod to Multus, with FG enabled", *v1.DefaultPodNetwork(),
-			*libvmi.MultusNetwork("default", secondaryNADName1), liveUpdateNADRefEnabled),
-		Entry("From Multus to Pod, with FG enabled", *libvmi.MultusNetwork("default", secondaryNADName1),
-			*v1.DefaultPodNetwork(), liveUpdateNADRefEnabled),
-		Entry("From Pod to Multus, with FG disabled", *v1.DefaultPodNetwork(),
-			*libvmi.MultusNetwork("default", secondaryNADName1), !liveUpdateNADRefEnabled),
-		Entry("From Multus to Pod, with FG disabled", *libvmi.MultusNetwork("default", secondaryNADName1),
-			*v1.DefaultPodNetwork(), !liveUpdateNADRefEnabled),
+		Entry("From Pod to Multus", *v1.DefaultPodNetwork(),
+			*libvmi.MultusNetwork("default", secondaryNADName1)),
+		Entry("From Multus to Pod", *libvmi.MultusNetwork("default", secondaryNADName1),
+			*v1.DefaultPodNetwork()),
 	)
 
-	DescribeTable("should require restart when NAD name changes only if FG LiveUpdateNADRef is disabled", func(
-		isLiveUpdateNADRefEnabled bool,
-		shouldRequireRestart bool,
-	) {
-		vmi := libvmi.New(
-			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
-			libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName1, secondaryNADName1)),
-		)
+	DescribeTable("should set restart requirement for NAD name changes based on migratability",
+		func(conditions []v1.VirtualMachineInstanceCondition, expectedRestart bool) {
+			vmi := libvmi.New(
+				libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetName1)),
+				libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName1, secondaryNADName1)),
+			)
+			vmi.Status.Conditions = conditions
 
-		vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
-		vm.Spec.Template.Spec.Networks[0] = *libvmi.MultusNetwork(secondaryNetName1, secondaryNADName2)
+			vm := libvmi.NewVirtualMachine(vmi).DeepCopy()
+			vm.Spec.Template.Spec.Networks[0] = *libvmi.MultusNetwork(secondaryNetName1, secondaryNADName2)
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{isLiveUpdateNADRefEnabled})).To(Equal(shouldRequireRestart))
-	},
-		Entry("With FG enabled", liveUpdateNADRefEnabled, false),
-		Entry("With FG disabled", !liveUpdateNADRefEnabled, true),
+			Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(Equal(expectedRestart))
+		},
+		Entry("when VM is migratable", []v1.VirtualMachineInstanceCondition{
+			{Type: v1.VirtualMachineInstanceIsMigratable, Status: k8sv1.ConditionTrue},
+		}, false),
+		Entry("when VM is non-migratable", []v1.VirtualMachineInstanceCondition{
+			{Type: v1.VirtualMachineInstanceIsMigratable, Status: k8sv1.ConditionFalse},
+		}, true),
+		Entry("when IsMigratable condition is absent", nil, true),
 	)
 
-	DescribeTable("Should require restart when interfaces and networks are removed", func(isliveUpdateNADRefEnabled bool) {
+	It("Should require restart when interfaces and networks are removed", func() {
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetName1)),
@@ -229,13 +219,10 @@ var _ = Describe("IsRestartRequired", func() {
 		vm.Spec.Template.Spec.Domain.Devices.Interfaces = vm.Spec.Template.Spec.Domain.Devices.Interfaces[:1]
 		vm.Spec.Template.Spec.Networks = vm.Spec.Template.Spec.Networks[:1]
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{isliveUpdateNADRefEnabled})).To(BeTrue())
-	},
-		Entry("With FG enabled", liveUpdateNADRefEnabled),
-		Entry("With FG disabled", !liveUpdateNADRefEnabled),
-	)
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeTrue())
+	})
 
-	DescribeTable("should require restart when pod network is added to networkless VM", func(isliveUpdateNADRefEnabled bool) {
+	It("should require restart when pod network is added to networkless VM", func() {
 		vmi := libvmi.New()
 
 		vm := libvmi.NewVirtualMachine(
@@ -245,17 +232,6 @@ var _ = Describe("IsRestartRequired", func() {
 			),
 		)
 
-		Expect(vmliveupdate.IsRestartRequired(vm, vmi, stubClusterConfigurer{isliveUpdateNADRefEnabled})).To(BeTrue())
-	},
-		Entry("With FG enabled", liveUpdateNADRefEnabled),
-		Entry("With FG disabled", !liveUpdateNADRefEnabled),
-	)
+		Expect(vmliveupdate.IsRestartRequired(vm, vmi)).To(BeTrue())
+	})
 })
-
-type stubClusterConfigurer struct {
-	isLiveUpdateNADRefEnabled bool
-}
-
-func (s stubClusterConfigurer) LiveUpdateNADRefEnabled() bool {
-	return s.isLiveUpdateNADRefEnabled
-}

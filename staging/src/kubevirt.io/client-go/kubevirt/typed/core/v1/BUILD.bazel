@@ -44,15 +44,18 @@ go_test(
     name = "go_default_test",
     srcs = [
         "async_test.go",
+        "streamer_test.go",
         "v1_suite_test.go",
         "websocket_test.go",
     ],
     embed = [":go_default_library"],
     race = "on",
     deps = [
+        "//staging/src/kubevirt.io/client-go/testutils:go_default_library",
         "//vendor/github.com/gorilla/websocket:go_default_library",
         "//vendor/github.com/onsi/ginkgo/v2:go_default_library",
         "//vendor/github.com/onsi/gomega:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/util/rand:go_default_library",
+        "//vendor/k8s.io/client-go/rest:go_default_library",
     ],
 )

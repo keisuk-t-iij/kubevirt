@@ -27,6 +27,7 @@ import (
 	"kubevirt.io/kubevirt/pkg/monitoring/metrics/common/vmisync"
 	"kubevirt.io/kubevirt/pkg/monitoring/metrics/common/workqueue"
 	"kubevirt.io/kubevirt/pkg/monitoring/metrics/virt-handler/domainstats"
+	"kubevirt.io/kubevirt/pkg/monitoring/metrics/virt-handler/gpuinfo"
 	"kubevirt.io/kubevirt/pkg/monitoring/metrics/virt-handler/migrationdomainstats"
 )
 
@@ -46,13 +47,14 @@ func SetupMetrics(
 		return err
 	}
 
-	if err := operatormetrics.RegisterMetrics(componentMetrics, versionMetrics, machineTypeMetrics); err != nil {
+	if err := operatormetrics.RegisterMetrics(componentMetrics, versionMetrics, machineTypeMetrics, guestPanicMetrics); err != nil {
 		return err
 	}
 	SetVersionInfo()
 	ReportDeprecatedMachineTypes(machines, nodeName)
 
 	domainstats.SetupDomainStatsCollector(maxRequestsInFlight, vmiInformer)
+	gpuinfo.Setup(nodeName)
 
 	if err := migrationdomainstats.SetupMigrationStatsCollector(vmiInformer); err != nil {
 		return err
@@ -62,6 +64,7 @@ func SetupMetrics(
 		domainstats.Collector,
 		domainstats.DomainDirtyRateStatsCollector,
 		migrationdomainstats.MigrationStatsCollector,
+		gpuinfo.Collector,
 	)
 }
 

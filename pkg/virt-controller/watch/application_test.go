@@ -136,7 +136,7 @@ var _ = Describe("Application", func() {
 
 		app.vmiInformer = vmiInformer
 		app.nodeTopologyUpdater = topologyUpdater
-		app.informerFactory = controller.NewKubeInformerFactory(nil, nil, nil, "test")
+		app.informerFactory = controller.NewKubeInformerFactory(nil, nil, nil, nil, "test")
 		app.evacuationController, _ = evacuation.NewEvacuationController(vmiInformer, migrationInformer, nodeInformer, podInformer, recorder, virtClient, config)
 		app.disruptionBudgetController, _ = disruptionbudget.NewDisruptionBudgetController(vmiInformer, pdbInformer, podInformer, migrationInformer, recorder, virtClient)
 		app.nodeController, _ = node.NewController(virtClient, nodeInformer, vmiInformer, recorder)
@@ -163,6 +163,7 @@ var _ = Describe("Application", func() {
 				return nil
 			},
 			stubMigrationEvaluator{},
+			stubVSOCKAllocator{},
 			[]string{},
 			[]string{},
 		)
@@ -253,6 +254,7 @@ var _ = Describe("Application", func() {
 			ClusterPreferenceInformer:   clusterPreferenceInformer,
 			ControllerRevisionInformer:  controllerRevisionInformer,
 			VMBackupInformer:            backupInformer,
+			VMBackupTrackerInformer:     backupTrackerInformer,
 		}
 		_ = app.exportController.Init()
 		app.persistentVolumeClaimInformer = pvcInformer
@@ -320,6 +322,8 @@ var _ = Describe("Application", func() {
 			app.clusterConfig = clusterConfig
 			app.reInitChan = make(chan string, 10)
 			app.hasCDI = hasCDIAtInit
+			app.isVirtTemplateDeploymentEnabled = clusterConfig.VirtTemplateDeploymentEnabled()
+			app.isDRAEnabled = app.clusterConfig.AnyDeviceDRAGateEnabled()
 
 			app.clusterConfig.SetConfigModifiedCallback(app.configModificationCallback)
 
@@ -386,6 +390,14 @@ var _ = Describe("Application", func() {
 		})
 	})
 })
+
+type stubVSOCKAllocator struct{}
+
+func (stubVSOCKAllocator) Sync(_ []*v1.VirtualMachineInstance) {}
+
+func (stubVSOCKAllocator) Allocate(_ *v1.VirtualMachineInstance) error { return nil }
+
+func (stubVSOCKAllocator) Remove(_ string) {}
 
 type stubMigrationEvaluator struct{}
 

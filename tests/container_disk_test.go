@@ -21,7 +21,6 @@ package tests_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -33,7 +32,6 @@ import (
 	k8sv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sversion "k8s.io/apimachinery/pkg/version"
 
 	v1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
@@ -45,6 +43,8 @@ import (
 	cd "kubevirt.io/kubevirt/tests/containerdisk"
 	"kubevirt.io/kubevirt/tests/decorators"
 	"kubevirt.io/kubevirt/tests/exec"
+	"kubevirt.io/kubevirt/tests/flags"
+	"kubevirt.io/kubevirt/tests/framework/checks"
 	"kubevirt.io/kubevirt/tests/framework/kubevirt"
 	"kubevirt.io/kubevirt/tests/framework/matcher"
 	"kubevirt.io/kubevirt/tests/libkubevirt"
@@ -97,7 +97,7 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 		})
 	})
 
-	Describe("[rfe_id:273][crit:medium][vendor:cnv-qe@redhat.com][level:component]Starting a VirtualMachineInstance", func() {
+	Describe("[rfe_id:273][crit:medium][vendor:cnv-qe@redhat.com][level:component]Starting a VirtualMachineInstance", decorators.WgS390x, func() {
 		Context("should obey the disk verification limits in the KubeVirt CR", Serial, func() {
 			It("[test_id:7182]disk verification should fail when the memory limit is too low", func() {
 				By("Reducing the diskVerificaton memory usage limit")
@@ -131,7 +131,7 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 			// Skip on s390x to avoid building and deploying an additional alpine image
 			It("[test_id:1466]should boot normally", func() {
 				By("Starting the VirtualMachineInstance")
-				vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewCirros(overrideCustomLocation), libvmops.StartupTimeoutSecondsSmall)
+				vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewCirros(overrideCustomLocation), flags.StartupTimeoutSecondsSmall())
 
 				By("Verify VMI is booted")
 				Expect(console.LoginToCirros(vmi)).To(Succeed())
@@ -146,7 +146,7 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 				vmi := libvmifact.NewAlpine(
 					libvmi.WithEphemeralCDRom("disk4", v1.DiskBusSATA, cd.ContainerDiskFor(cd.ContainerDiskVirtio)),
 				)
-				vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsSmall)
+				vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsSmall())
 
 				By("Checking whether the second disk really contains virtio drivers")
 				Expect(console.LoginToAlpine(vmi)).To(Succeed(), "expected alpine to login properly")
@@ -170,8 +170,13 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 
 	Describe("[rfe_id:4052][crit:high][vendor:cnv-qe@redhat.com][level:component]VMI disk permissions", decorators.WgS390x, decorators.WgArm64, func() {
 		Context("with ephemeral registry disk", func() {
-			It("[test_id:4299]should not have world write permissions", func() {
-				vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewAlpine(), libvmops.StartupTimeoutSecondsSmall)
+			It("[test_id:4299]should not have world write permissions", Serial, func() {
+				if checks.HasFeature(featuregate.ImageVolume) {
+					config.DisableFeatureGate(featuregate.ImageVolume)
+					DeferCleanup(config.EnableFeatureGate, featuregate.ImageVolume)
+				}
+
+				vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewAlpine(), flags.StartupTimeoutSecondsSmall())
 
 				By("Ensuring VMI is running by logging in")
 				libwait.WaitUntilVMIReady(vmi, console.LoginToAlpine)
@@ -206,9 +211,49 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 		})
 	})
 
+	// TODO: Once all containerDisk images are migrated to ORAS (see VEP 392),
+	// these dedicated ORAS tests can be dropped since the existing containerDisk
+	// tests would implicitly cover ORAS artifact support.
+	Describe("Starting a VMI from a raw ORAS artifact", decorators.ImageVolume, func() {
+		BeforeEach(func() {
+			v, err := checks.GetKubernetesVersion()
+			Expect(err).ToNot(HaveOccurred())
+			if v < "1.35" {
+				Fail("this test requires Kubernetes version >= 1.35")
+			}
+			if !checks.HasFeature(featuregate.ImageVolume) {
+				Fail("ImageVolume feature gate is not enabled")
+			}
+		})
+
+		It("should boot, live migrate, and login to a VMI using a raw ORAS artifact", func() {
+			vmi := libvmi.New(
+				libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
+				libvmi.WithNetwork(v1.DefaultPodNetwork()),
+				libvmi.WithResourceMemory("256Mi"),
+				libvmi.WithContainerDiskAndPullPolicy("rootdisk", flags.OrasTestArtifactImage, k8sv1.PullAlways),
+				libvmi.WithAnnotation(v1.ImageVolumeSkipDigestResolutionAnnotation, "true"),
+			)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsLarge())
+
+			By("Logging into the VM")
+			Expect(console.LoginToAlpine(vmi)).To(Succeed())
+
+			By("Starting live migration")
+			migration := libmigration.New(vmi.Name, vmi.Namespace)
+			migration = libmigration.RunMigrationAndExpectToCompleteWithDefaultTimeout(virtClient, migration)
+
+			By("Verifying the VMI is still running after migration")
+			vmi = libmigration.ConfirmVMIPostMigration(virtClient, vmi, migration)
+
+			By("Logging in after migration")
+			Expect(console.LoginToAlpine(vmi)).To(Succeed())
+		})
+	})
+
 	Describe("Simulate an upgrade from a version where ImageVolume was disabled to a version where it is enabled", Serial, decorators.ImageVolume, decorators.NoFlakeCheck, func() {
 		BeforeEach(func() {
-			v, err := getKubernetesVersion()
+			v, err := checks.GetKubernetesVersion()
 			Expect(err).ToNot(HaveOccurred())
 			if v < "1.35" {
 				// Fail the test if the Kubernetes version is lower than 1.33
@@ -222,7 +267,7 @@ var _ = Describe("[rfe_id:588][crit:medium][vendor:cnv-qe@redhat.com][level:comp
 
 		DescribeTable("Migration from a source launcher with the bind mount workaround to a target launcher without the bind mount workaround should succeed when", func(vmi *v1.VirtualMachineInstance, loginTo console.LoginToFunction) {
 			config.DisableFeatureGate(featuregate.ImageVolume)
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsSmall)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsSmall())
 			By("Fetching virt-launcher pod without ImageVolume")
 			sourcePod, err := libpod.GetPodByVirtualMachineInstance(vmi, vmi.Namespace)
 			Expect(sourcePod.Spec.InitContainers).To(ContainElement(HaveField("Name", "container-disk-binary")),
@@ -281,22 +326,4 @@ func newAlpineWithKernelBoot() *v1.VirtualMachineInstance {
 	)
 	utils.AddKernelBootToVMI(vmi)
 	return vmi
-}
-
-func getKubernetesVersion() (string, error) {
-	var info k8sversion.Info
-	virtClient, err := kubecli.GetKubevirtClient()
-	if err != nil {
-		return "", err
-	}
-	response, err := virtClient.RestClient().Get().AbsPath("/version").DoRaw(context.Background())
-	if err != nil {
-		return "", err
-	}
-	if err := json.Unmarshal(response, &info); err != nil {
-		return "", err
-	}
-	curVersion := strings.Split(info.GitVersion, "+")[0]
-	curVersion = strings.Trim(curVersion, "v")
-	return curVersion, nil
 }

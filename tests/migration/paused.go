@@ -48,6 +48,7 @@ import (
 	"kubevirt.io/client-go/kubecli"
 
 	"kubevirt.io/kubevirt/tests/console"
+	"kubevirt.io/kubevirt/tests/flags"
 	"kubevirt.io/kubevirt/tests/libnet"
 	"kubevirt.io/kubevirt/tests/libvmops"
 )
@@ -107,7 +108,6 @@ var _ = Describe(SIG("Live Migrate A Paused VMI", decorators.RequiresTwoSchedula
 						By("creating a large Virtual Machine Instance")
 						vmi := libvmifact.NewFedora(
 							libnet.WithMasqueradeNetworking(),
-							libvmi.WithMemoryRequest("512Mi"),
 							libvmi.WithRng())
 
 						// update the migration policy to ensure slow pre-copy migration progress instead of an immediate cancellation.
@@ -120,7 +120,7 @@ var _ = Describe(SIG("Live Migrate A Paused VMI", decorators.RequiresTwoSchedula
 						}
 
 						By("Starting the VirtualMachineInstance")
-						vmi = libvmops.RunVMIAndExpectLaunch(vmi, libvmops.StartupTimeoutSecondsHuge)
+						vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsHuge())
 
 						By("Checking that the VirtualMachineInstance console has expected output")
 						Expect(console.LoginToFedora(vmi)).To(Succeed())
@@ -148,7 +148,7 @@ var _ = Describe(SIG("Live Migrate A Paused VMI", decorators.RequiresTwoSchedula
 
 					},
 						Entry("migrate successfully (migration policy)", expectSuccess, "10Mi", applyWithMigrationPolicy),
-						Entry("migrate successfully (CR change)", Serial, expectSuccess, "10Mi", applyWithKubevirtCR),
+						Entry("migrate successfully (CR change)", decorators.WgS390x, Serial, expectSuccess, "10Mi", applyWithKubevirtCR),
 					)
 				})
 			})

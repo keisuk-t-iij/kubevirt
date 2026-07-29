@@ -161,18 +161,15 @@ func WithGPUsDevicePlugins(gpus []v1.GPU) ResourceRendererOption {
 
 func WithGPUsDRA(gpus []v1.GPU) ResourceRendererOption {
 	return func(r *ResourceRenderer) {
-		res := r.ResourceRequirements()
 		for _, g := range gpus {
 			if g.DeviceName == "" && g.ClaimRequest != nil {
-				requestResourceClaims(&res, &k8sv1.ResourceClaim{
-					Name:    *g.ClaimRequest.ClaimName,
-					Request: *g.ClaimRequest.RequestName,
-				})
+				claim := k8sv1.ResourceClaim{
+					Name:    g.ClaimRequest.ClaimName,
+					Request: g.ClaimRequest.RequestName,
+				}
+				r.resourceClaims = append(r.resourceClaims, claim)
 			}
 		}
-		copyResources(res.Limits, r.calculatedLimits)
-		copyResources(res.Requests, r.calculatedRequests)
-		copyResourceClaims(&res, &r.resourceClaims)
 	}
 }
 
@@ -193,18 +190,30 @@ func WithHostDevicesDevicePlugins(hostDevices []v1.HostDevice) ResourceRendererO
 // WithHostDevicesDRA adds ResourceClaims for HostDevices provisioned via DRA.
 func WithHostDevicesDRA(hostDevices []v1.HostDevice) ResourceRendererOption {
 	return func(r *ResourceRenderer) {
-		resources := r.ResourceRequirements()
 		for _, hd := range hostDevices {
-			if hd.DeviceName == "" && hd.ClaimRequest != nil && hd.ClaimRequest.ClaimName != nil && hd.ClaimRequest.RequestName != nil {
-				requestResourceClaims(&resources, &k8sv1.ResourceClaim{
-					Name:    *hd.ClaimRequest.ClaimName,
-					Request: *hd.ClaimRequest.RequestName,
-				})
+			if hd.DeviceName == "" && hd.ClaimRequest != nil {
+				claim := k8sv1.ResourceClaim{
+					Name:    hd.ClaimRequest.ClaimName,
+					Request: hd.ClaimRequest.RequestName,
+				}
+				r.resourceClaims = append(r.resourceClaims, claim)
 			}
 		}
-		copyResources(resources.Limits, r.calculatedLimits)
-		copyResources(resources.Requests, r.calculatedRequests)
-		copyResourceClaims(&resources, &r.resourceClaims)
+	}
+}
+
+// WithNetworksDRA adds ResourceClaims for Networks provisioned via DRA.
+func WithNetworksDRA(networks []v1.Network) ResourceRendererOption {
+	return func(r *ResourceRenderer) {
+		for _, net := range networks {
+			if netvmispec.IsDRANetwork(net) {
+				claim := k8sv1.ResourceClaim{
+					Name:    net.NetworkSource.ResourceClaim.ClaimName,
+					Request: net.NetworkSource.ResourceClaim.RequestName,
+				}
+				r.resourceClaims = append(r.resourceClaims, claim)
+			}
+		}
 	}
 }
 
@@ -391,32 +400,18 @@ func WithPersistentReservation() ResourceRendererOption {
 	}
 }
 
+func WithIOMMUFD() ResourceRendererOption {
+	return func(renderer *ResourceRenderer) {
+		resources := renderer.ResourceRequirements()
+		requestResource(&resources, IOMMUFDDevice)
+		copyResources(resources.Limits, renderer.calculatedLimits)
+		copyResources(resources.Requests, renderer.calculatedRequests)
+	}
+}
+
 func copyResources(srcResources, dstResources k8sv1.ResourceList) {
 	for key, value := range srcResources {
 		dstResources[key] = value
-	}
-}
-
-func requestResourceClaims(resources *k8sv1.ResourceRequirements, claim *k8sv1.ResourceClaim) {
-	if resources.Claims == nil {
-		resources.Claims = []k8sv1.ResourceClaim{*claim}
-		return
-	}
-	resources.Claims = append(resources.Claims, *claim)
-}
-
-func copyResourceClaims(resources *k8sv1.ResourceRequirements, claims *[]k8sv1.ResourceClaim) {
-	existing := make(map[string]struct{})
-	for _, c := range *claims {
-		existing[c.Name] = struct{}{}
-	}
-
-	for _, value := range resources.Claims {
-		if _, found := existing[value.Name]; found {
-			continue // skip duplicates by Name
-		}
-		*claims = append(*claims, value)
-		existing[value.Name] = struct{}{}
 	}
 }
 
@@ -510,23 +505,8 @@ func validatePermittedHostDevices(spec *v1.VirtualMachineInstanceSpec, config *v
 		for _, dev := range hostDevs.USB {
 			supportedHostDevicesMap[dev.ResourceName] = true
 		}
-		//TODO @alayp: add proper validation for DRA GPUs in beta
-		if !config.GPUsWithDRAGateEnabled() {
-			for _, hostDev := range spec.Domain.Devices.GPUs {
-				if _, exist := supportedHostDevicesMap[hostDev.DeviceName]; !exist {
-					errors = append(errors, fmt.Sprintf("GPU %s is not permitted in permittedHostDevices configuration", hostDev.DeviceName))
-				}
-			}
-		}
-		for _, hostDev := range spec.Domain.Devices.HostDevices {
-			// skip host devices backed by DRA claims, since they are validated via DRA instead of the permittedHostDevices config
-			if config.HostDevicesWithDRAEnabled() && hostDev.ClaimRequest != nil {
-				continue
-			}
-			if _, exist := supportedHostDevicesMap[hostDev.DeviceName]; !exist {
-				errors = append(errors, fmt.Sprintf("HostDevice %s is not permitted in permittedHostDevices configuration", hostDev.DeviceName))
-			}
-		}
+		errors = append(errors, validateGPUs(spec.Domain.Devices.GPUs, config.GPUsWithDRAGateEnabled(), supportedHostDevicesMap)...)
+		errors = append(errors, validateHostDevices(spec.Domain.Devices.HostDevices, config.HostDevicesWithDRAEnabled(), supportedHostDevicesMap)...)
 	}
 
 	if len(errors) != 0 {
@@ -534,6 +514,32 @@ func validatePermittedHostDevices(spec *v1.VirtualMachineInstanceSpec, config *v
 	}
 
 	return nil
+}
+
+func validateGPUs(gpus []v1.GPU, draEnabled bool, supportedHostDevicesMap map[string]bool) (errors []string) {
+	for _, hostDev := range gpus {
+		// skip GPU devices backed by DRA claims, since they are validated via DRA instead of the permittedHostDevices config
+		if draEnabled && hostDev.ClaimRequest != nil {
+			continue
+		}
+		if _, exist := supportedHostDevicesMap[hostDev.DeviceName]; !exist {
+			errors = append(errors, fmt.Sprintf("GPU %s is not permitted in permittedHostDevices configuration", hostDev.DeviceName))
+		}
+	}
+	return errors
+}
+
+func validateHostDevices(hostDevs []v1.HostDevice, draEnabled bool, supportedHostDevicesMap map[string]bool) (errors []string) {
+	for _, hostDev := range hostDevs {
+		// skip host devices backed by DRA claims, since they are validated via DRA instead of the permittedHostDevices config
+		if draEnabled && hostDev.ClaimRequest != nil {
+			continue
+		}
+		if _, exist := supportedHostDevicesMap[hostDev.DeviceName]; !exist {
+			errors = append(errors, fmt.Sprintf("HostDevice %s is not permitted in permittedHostDevices configuration", hostDev.DeviceName))
+		}
+	}
+	return errors
 }
 
 func sidecarResources(vmi *v1.VirtualMachineInstance, config *virtconfig.ClusterConfig) k8sv1.ResourceRequirements {

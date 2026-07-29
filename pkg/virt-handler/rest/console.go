@@ -20,29 +20,26 @@
 package rest
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 	"sync"
 
 	"github.com/emicklei/go-restful/v3"
-	"github.com/mdlayher/vsock"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/certificate"
-
 	v1 "kubevirt.io/api/core/v1"
 	kvcorev1 "kubevirt.io/client-go/kubevirt/typed/core/v1"
 	"kubevirt.io/client-go/log"
 
+	"kubevirt.io/kubevirt/pkg/safepath"
 	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/virt-handler/isolation"
+	virtvsock "kubevirt.io/kubevirt/pkg/virt-handler/vsock"
 )
 
 type ConsoleHandler struct {
@@ -54,14 +51,14 @@ type ConsoleHandler struct {
 	vmiStore             cache.Store
 	usbredir             map[types.UID]UsbredirHandlerVMI
 	usbredirLock         *sync.Mutex
-	vsockCertManager     certificate.Manager
+	vsockDialer          *virtvsock.Dialer
 }
 
 type UsbredirHandlerVMI struct {
 	stopChans map[int]chan struct{}
 }
 
-func NewConsoleHandler(podIsolationDetector isolation.PodIsolationDetector, vmiStore cache.Store, certManager certificate.Manager) *ConsoleHandler {
+func NewConsoleHandler(podIsolationDetector isolation.PodIsolationDetector, vmiStore cache.Store, vsockDialer *virtvsock.Dialer) *ConsoleHandler {
 	return &ConsoleHandler{
 		podIsolationDetector: podIsolationDetector,
 		serialStopChans:      make(map[types.UID]chan struct{}),
@@ -71,7 +68,7 @@ func NewConsoleHandler(podIsolationDetector isolation.PodIsolationDetector, vmiS
 		usbredirLock:         &sync.Mutex{},
 		vmiStore:             vmiStore,
 		usbredir:             make(map[types.UID]UsbredirHandlerVMI),
-		vsockCertManager:     certManager,
+		vsockDialer:          vsockDialer,
 	}
 }
 
@@ -86,7 +83,7 @@ func (t *ConsoleHandler) USBRedirHandler(request *restful.Request, response *res
 	uid := vmi.GetUID()
 	stopChan := make(chan struct{})
 	var slotId int
-	var unixSocketPath string
+	var unixSocketPath *safepath.Path
 	ok := func() bool {
 		// For simplicity, we handle one usbredir request at the time, for all VMIs
 		// handled by virt-handler
@@ -232,35 +229,8 @@ func (t *ConsoleHandler) VSOCKHandler(request *restful.Request, response *restfu
 		response.WriteError(http.StatusBadRequest, err)
 		return
 	}
-	cid := *vmi.Status.VSOCKCID
 	t.stream(vmi, request, response, func() (net.Conn, error) {
-		log.Log.Object(vmi).Infof("Connecting to %d:%d", cid, port)
-		conn, err := vsock.Dial(cid, uint32(port), &vsock.Config{})
-		if err != nil {
-			log.Log.Object(vmi).Reason(err).Errorf("failed to dial vsock %d:%d", cid, port)
-			return nil, err
-		}
-		if !useTLS {
-			log.Log.Object(vmi).Infof("Connected to %d:%d", cid, port)
-			return conn, nil
-		}
-		tlsConn := tls.Client(conn, &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
-			GetClientCertificate: func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-				certificate := t.vsockCertManager.Current()
-				if certificate == nil {
-					return nil, fmt.Errorf("missing VSOCK certificate")
-				}
-				return certificate, nil
-			},
-		})
-		if err := tlsConn.Handshake(); err != nil {
-			log.Log.Object(vmi).Reason(err).Errorf("Failed to connect to %d:%d over TLS", cid, port)
-			return nil, err
-		}
-		log.Log.Object(vmi).Infof("Connected to %d:%d over TLS", cid, port)
-		return tlsConn, nil
+		return t.vsockDialer.Dial(vmi, uint32(port), useTLS)
 	}, make(chan struct{})) // It is legitimate and up to the guest-application to accept multiple connections.
 }
 
@@ -287,30 +257,32 @@ func deleteStopChan(uid types.UID, stopChn chan struct{}, lock *sync.Mutex, stop
 	}
 }
 
-func (t *ConsoleHandler) getUnixSocketPath(vmi *v1.VirtualMachineInstance, socketName string) (string, error) {
+func (t *ConsoleHandler) getUnixSocketPath(vmi *v1.VirtualMachineInstance, socketName string) (*safepath.Path, error) {
 	result, err := t.podIsolationDetector.Detect(vmi)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	socketDir := path.Join("/proc", strconv.Itoa(result.Pid()), "root", "var", "run", "kubevirt-private", string(vmi.GetUID()))
-	socketPath := path.Join(socketDir, socketName)
-	if _, err = os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
-		return "", err
+	root, err := result.MountRoot()
+	if err != nil {
+		return nil, err
 	}
-
-	return socketPath, nil
+	return safepath.JoinNoFollow(root, filepath.Join("run", "kubevirt-private", string(vmi.GetUID()), socketName))
 }
 
-func unixSocketDialer(vmi *v1.VirtualMachineInstance, unixSocketPath string) func() (net.Conn, error) {
+func unixSocketDialer(vmi *v1.VirtualMachineInstance, socketPath *safepath.Path) func() (net.Conn, error) {
 	return func() (net.Conn, error) {
-		log.Log.Object(vmi).Infof("Connecting to %s", unixSocketPath)
-		fd, err := net.Dial("unix", unixSocketPath)
-		if err != nil {
-			log.Log.Object(vmi).Reason(err).Errorf("failed to dial unix socket %s", unixSocketPath)
-			return nil, err
-		}
-		log.Log.Object(vmi).Infof("Connected to %s", unixSocketPath)
-		return fd, nil
+		var conn net.Conn
+		err := socketPath.ExecuteNoFollow(func(safePath string) error {
+			log.Log.Object(vmi).Infof("Connecting to %s", safePath)
+			var dialErr error
+			conn, dialErr = net.Dial("unix", safePath)
+			if dialErr != nil {
+				return fmt.Errorf("failed to dial unix socket %s: %w", safePath, dialErr)
+			}
+			log.Log.Object(vmi).Infof("Connected to %s", safePath)
+			return nil
+		})
+		return conn, err
 	}
 }
 
@@ -328,6 +300,7 @@ func (t *ConsoleHandler) stream(vmi *v1.VirtualMachineInstance, request *restful
 
 	conn, err := dial()
 	if err != nil {
+		log.Log.Object(vmi).Reason(err).Error("Failed to dial connection")
 		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}

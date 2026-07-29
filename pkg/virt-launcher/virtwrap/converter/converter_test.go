@@ -53,11 +53,13 @@ import (
 	"kubevirt.io/kubevirt/pkg/libvmi"
 	"kubevirt.io/kubevirt/pkg/os/disk"
 	"kubevirt.io/kubevirt/pkg/pointer"
+	"kubevirt.io/kubevirt/pkg/storage/volumepath"
 	"kubevirt.io/kubevirt/pkg/testutils"
 	"kubevirt.io/kubevirt/pkg/util"
 	"kubevirt.io/kubevirt/pkg/util/hardware"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/api"
 	archconverter "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/arch"
+	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/compute"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/network"
 	convertertypes "kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/types"
 	"kubevirt.io/kubevirt/pkg/virt-launcher/virtwrap/converter/vcpu"
@@ -67,14 +69,14 @@ import (
 )
 
 var (
-	//go:embed testdata/domain_x86_64.xml.tmpl
-	embedDomainTemplateX86_64 string
-	//go:embed testdata/domain_arm64.xml.tmpl
-	embedDomainTemplateARM64 string
-	//go:embed testdata/domain_s390x.xml.tmpl
-	embedDomainTemplateS390X string
-	//go:embed testdata/domain_x86_64_root.xml.tmpl
-	embedDomainTemplateRootBus string
+	//go:embed testdata/domain_x86_64.xml
+	embedDomainX86_64 string
+	//go:embed testdata/domain_arm64.xml
+	embedDomainARM64 string
+	//go:embed testdata/domain_s390x.xml
+	embedDomainS390X string
+	//go:embed testdata/domain_x86_64_root.xml
+	embedDomainRootBus string
 )
 
 const (
@@ -96,21 +98,6 @@ func MultiArchEntry(text string, args ...interface{}) []TableEntry {
 		Entry(fmt.Sprintf("%s on %s", text, arm64), append([]interface{}{arm64}, args...)...),
 		Entry(fmt.Sprintf("%s on %s", text, s390x), append([]interface{}{s390x}, args...)...),
 	}
-}
-
-func memBalloonWithModelAndPeriod(model string, period int) string {
-	const argMemBalloonFmt = `<memballoon model="%s" freePageReporting="on">%s</memballoon>`
-	if model == "none" {
-		return `<memballoon model="none"></memballoon>`
-	}
-
-	if period == 0 {
-		return fmt.Sprintf(argMemBalloonFmt, model, "")
-	}
-
-	return fmt.Sprintf(argMemBalloonFmt, model, fmt.Sprintf(`
-      <stats period="%d"></stats>
-    `, period))
 }
 
 // createContextWithDevices creates a ConverterContext populated with mock host devices
@@ -752,28 +739,10 @@ var _ = Describe("Converter", func() {
 			vmi.ObjectMeta.UID = "f4686d2c-6e8d-4335-b8fd-81bee22f4814"
 		})
 
-		var convertedDomain = strings.TrimSpace(embedDomainTemplateX86_64)
-		var convertedDomainWith5Period = fmt.Sprintf(convertedDomain, memBalloonWithModelAndPeriod("virtio-non-transitional", 5))
-		var convertedDomainWith0Period = fmt.Sprintf(convertedDomain, memBalloonWithModelAndPeriod("virtio-non-transitional", 0))
-		var convertedDomainWithFalseAutoattach = fmt.Sprintf(convertedDomain, memBalloonWithModelAndPeriod("none", 0))
-
-		convertedDomain = fmt.Sprintf(convertedDomain, memBalloonWithModelAndPeriod("virtio-non-transitional", 10))
-
-		var convertedDomainarm64 = strings.TrimSpace(embedDomainTemplateARM64)
-		var convertedDomainarm64With5Period = fmt.Sprintf(convertedDomainarm64, memBalloonWithModelAndPeriod("virtio-non-transitional", 5))
-		var convertedDomainarm64With0Period = fmt.Sprintf(convertedDomainarm64, memBalloonWithModelAndPeriod("virtio-non-transitional", 0))
-		var convertedDomainarm64WithFalseAutoattach = fmt.Sprintf(convertedDomainarm64, memBalloonWithModelAndPeriod("none", 0))
-
-		convertedDomainarm64 = fmt.Sprintf(convertedDomainarm64, memBalloonWithModelAndPeriod("virtio-non-transitional", 10))
-
-		var convertedDomains390x = strings.TrimSpace(embedDomainTemplateS390X)
-		var convertedDomains390xWith5Period = fmt.Sprintf(convertedDomains390x, memBalloonWithModelAndPeriod("virtio", 5))
-		var convertedDomains390xWith0Period = fmt.Sprintf(convertedDomains390x, memBalloonWithModelAndPeriod("virtio", 0))
-		var convertedDomains390xWithFalseAutoattach = fmt.Sprintf(convertedDomains390x, memBalloonWithModelAndPeriod("none", 0))
-
-		convertedDomains390x = fmt.Sprintf(convertedDomains390x, memBalloonWithModelAndPeriod("virtio", 10))
-
-		var convertedDomainWithDevicesOnRootBus = strings.TrimSpace(embedDomainTemplateRootBus)
+		var convertedDomain = strings.TrimSpace(embedDomainX86_64)
+		var convertedDomainarm64 = strings.TrimSpace(embedDomainARM64)
+		var convertedDomains390x = strings.TrimSpace(embedDomainS390X)
+		var convertedDomainWithDevicesOnRootBus = strings.TrimSpace(embedDomainRootBus)
 
 		var c *convertertypes.ConverterContext
 
@@ -859,35 +828,6 @@ var _ = Describe("Converter", func() {
 			Entry("for amd64", amd64, convertedDomain),
 			Entry("for arm64", arm64, convertedDomainarm64),
 			Entry("for s390x", s390x, convertedDomains390x),
-		)
-
-		DescribeTable("should be converted to a libvirt Domain", func(arch string, domain string, period uint) {
-			v1.SetObjectDefaults_VirtualMachineInstance(vmi)
-			vmi.Spec.Domain.Devices.Rng = &v1.Rng{}
-			c.Architecture = archconverter.NewConverter(arch)
-			vmiArchMutate(arch, vmi, c)
-			c.MemBalloonStatsPeriod = period
-			Expect(vmiToDomainXML(vmi, c)).To(Equal(domain))
-		},
-			Entry("when context define 5 period on memballoon device for amd64", amd64, convertedDomainWith5Period, uint(5)),
-			Entry("when context define 5 period on memballoon device for arm64", arm64, convertedDomainarm64With5Period, uint(5)),
-			Entry("when context define 5 period on memballoon device for s390x", s390x, convertedDomains390xWith5Period, uint(5)),
-			Entry("when context define 0 period on memballoon device for amd64 ", amd64, convertedDomainWith0Period, uint(0)),
-			Entry("when context define 0 period on memballoon device for arm64", arm64, convertedDomainarm64With0Period, uint(0)),
-			Entry("when context define 0 period on memballoon device for s390x", s390x, convertedDomains390xWith0Period, uint(0)),
-		)
-
-		DescribeTable("should be converted to a libvirt Domain", func(arch string, domain string) {
-			v1.SetObjectDefaults_VirtualMachineInstance(vmi)
-			vmi.Spec.Domain.Devices.Rng = &v1.Rng{}
-			vmi.Spec.Domain.Devices.AutoattachMemBalloon = pointer.P(false)
-			c.Architecture = archconverter.NewConverter(arch)
-			vmiArchMutate(arch, vmi, c)
-			Expect(vmiToDomainXML(vmi, c)).To(Equal(domain))
-		},
-			Entry("when Autoattach memballoon device is false for amd64", amd64, convertedDomainWithFalseAutoattach),
-			Entry("when Autoattach memballoon device is false for arm64", arm64, convertedDomainarm64WithFalseAutoattach),
-			Entry("when Autoattach memballoon device is false for s390x", s390x, convertedDomains390xWithFalseAutoattach),
 		)
 
 		Context("when all addresses should be placed at the root complex", func() {
@@ -1172,7 +1112,7 @@ var _ = Describe("Converter", func() {
 			Expect(domain.Spec.Devices.Disks[0].BackingStore).ToNot(BeNil())
 			Expect(domain.Spec.Devices.Disks[0].BackingStore.Type).To(Equal("block"))
 			By("Checking if the disk backing store device path is appropriately configured")
-			Expect(domain.Spec.Devices.Disks[0].BackingStore.Source.Dev).To(Equal(GetBlockDeviceVolumePath(blockPVCName)))
+			Expect(domain.Spec.Devices.Disks[0].BackingStore.Source.Dev).To(Equal(volumepath.BlockDevice(blockPVCName)))
 		})
 
 		It("should fail disk config pci address is set with a non virtio bus", func() {
@@ -1211,6 +1151,7 @@ var _ = Describe("Converter", func() {
 			domainSpec := vmiToDomainXMLToDomainSpec(vmi, c)
 			reserv := domainSpec.Devices.Disks[0].Source.Reservations
 			Expect(reserv.Managed).To(Equal("no"))
+			Expect(reserv.Migration).To(Equal("yes"))
 			Expect(reserv.SourceReservations.Type).To(Equal("unix"))
 			Expect(reserv.SourceReservations.Path).To(Equal("/var/run/kubevirt/daemons/pr/pr-helper.sock"))
 			Expect(reserv.SourceReservations.Mode).To(Equal("client"))
@@ -1356,7 +1297,7 @@ var _ = Describe("Converter", func() {
 					Expect(disk.Source.DataStore.Format).ToNot(BeNil())
 					Expect(disk.Source.DataStore.Format.Type).To(Equal("raw"))
 					Expect(disk.Source.DataStore.Source).ToNot(BeNil())
-					Expect(disk.Source.DataStore.Source.Dev).To(Equal(GetBlockDeviceVolumePath(volumeName)))
+					Expect(disk.Source.DataStore.Source.Dev).To(Equal(volumepath.BlockDevice(volumeName)))
 				},
 				Entry("PVC", "test-block-pvc",
 					func(name string) v1.VolumeSource {
@@ -1440,16 +1381,6 @@ var _ = Describe("Converter", func() {
 				Index: "0",
 				Model: "virtio-non-transitional",
 			}))
-		})
-
-		It("passt network interface should enable shared memory", func() {
-			v1.SetObjectDefaults_VirtualMachineInstance(vmi)
-			vmi.Spec.Domain.Devices.Interfaces[0].PasstBinding = &v1.InterfacePasstBinding{}
-			vmi.Status.Interfaces = []v1.VirtualMachineInstanceNetworkInterface{{Name: "default", PodInterfaceName: "eth0"}}
-			dom := &api.Domain{}
-			Expect(Convert_v1_VirtualMachineInstance_To_api_Domain(vmi, dom, c)).To(Succeed())
-			Expect(dom.Spec.MemoryBacking.Access.Mode).To(Equal("shared"))
-			Expect(dom.Spec.MemoryBacking.Source.Type).To(Equal("memfd"))
 		})
 
 		DescribeTable("usb controller", func(arch, bus string, matcher types.GomegaMatcher) {
@@ -1687,19 +1618,29 @@ var _ = Describe("Converter", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("should convert hugepages", func() {
+		DescribeTable("should convert hugepages", func(arch string, expectMemfd bool) {
 			v1.SetObjectDefaults_VirtualMachineInstance(vmi)
 			vmi.Spec.Domain.Memory = &v1.Memory{
 				Hugepages: &v1.Hugepages{},
 			}
+			c.Architecture = archconverter.NewConverter(arch)
 			domainSpec := vmiToDomainXMLToDomainSpec(vmi, c)
-			Expect(domainSpec.MemoryBacking.HugePages).ToNot(BeNil())
-			Expect(domainSpec.MemoryBacking.Source).ToNot(BeNil())
-			Expect(domainSpec.MemoryBacking.Source.Type).To(Equal("memfd"))
 
+			Expect(domainSpec.MemoryBacking.HugePages).ToNot(BeNil())
 			Expect(domainSpec.Memory.Value).To(Equal(uint64(8388608)))
 			Expect(domainSpec.Memory.Unit).To(Equal("b"))
-		})
+
+			if expectMemfd {
+				Expect(domainSpec.MemoryBacking.Source).ToNot(BeNil())
+				Expect(domainSpec.MemoryBacking.Source.Type).To(Equal("memfd"))
+			} else {
+				Expect(domainSpec.MemoryBacking.Source).To(BeNil())
+			}
+		},
+			Entry("with memfd on amd64", amd64, true),
+			Entry("with memfd on arm64", arm64, true),
+			Entry("without memfd on s390x", s390x, false),
+		)
 
 		It("should not add RNG when not present", func() {
 			domainSpec := vmiToDomainXMLToDomainSpec(vmi, c)
@@ -1755,9 +1696,15 @@ var _ = Describe("Converter", func() {
 
 		DescribeTable("should add VSOCK section when present",
 			func(useVirtioTransitional bool) {
+				fakeProc := GinkgoT().TempDir()
+				vsockPath := filepath.Join(fakeProc, "sys", "net", "vsock")
+				Expect(os.MkdirAll(vsockPath, 0755)).To(Succeed())
+				Expect(os.WriteFile(filepath.Join(vsockPath, "ns_mode"), []byte("global\n"), 0600)).To(Succeed())
+
 				vmi.Status.VSOCKCID = pointer.P(uint32(100))
 				vmi.Spec.Domain.Devices.AutoattachVSOCK = pointer.P(true)
 				c.UseVirtioTransitional = useVirtioTransitional
+				c.VSOCKProcPath = fakeProc
 				domainSpec := vmiToDomainXMLToDomainSpec(vmi, c)
 				Expect(domainSpec.Devices.VSOCK).ToNot(BeNil())
 				Expect(domainSpec.Devices.VSOCK.Model).To(Equal("virtio-non-transitional"))
@@ -1965,6 +1912,25 @@ var _ = Describe("Converter", func() {
 					Expect(rootPort.Address).ToNot(BeNil(), "root port %d should have a PCI address assigned", i)
 					Expect(rootPort.Address.Bus).To(Equal(numaExpander.Index), "root port %d should be attached to the expander bus", i)
 				}
+			})
+
+			It("should fail conversion when guest NUMA passthrough host devices cannot be NUMA placed", func() {
+				if cleanup != nil {
+					cleanup()
+				}
+				cleanup = setupMockHardwarePaths(map[string]string{
+					"0000:81:01.0": "0",
+					"0000:81:02.0": "0",
+					"0000:82:01.0": "0",
+				}, map[string]string{"0": "0-1"})
+
+				c = createContextWithDevices(vmi, c)
+				domain := &api.Domain{}
+				err := Convert_v1_VirtualMachineInstance_To_api_Domain(vmi, domain, c)
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("failed to process strict PCIe NUMA-aware topology"))
+				Expect(err.Error()).To(ContainSubstring("0000:82:02.0"))
 			})
 		})
 
@@ -2992,6 +2958,188 @@ var _ = Describe("Converter", func() {
 		})
 	})
 
+	Context("Correctly handle supplementalPool with dedicated cpus", func() {
+		DescribeTable("should succeed assigning CPUs to supplementalPool",
+			func(vmiAnnotations map[string]string, isolateEmulator bool, vCPUs, iothreadCount uint32, expectedLayout api.CPUTune) {
+				c := &convertertypes.ConverterContext{
+					Architecture:   archconverter.NewConverter(runtime.GOARCH),
+					AllowEmulation: true,
+					CPUSet:         []int{5, 6, 7, 8, 9, 10, 11, 12},
+					Topology: &cmdv1.Topology{
+						NumaCells: []*cmdv1.Cell{{
+							Cpus: []*cmdv1.CPU{
+								{Id: 5}, {Id: 6}, {Id: 7}, {Id: 8}, {Id: 9}, {Id: 10},
+								{Id: 11}, {Id: 12},
+							},
+						}},
+					},
+				}
+
+				vmi := libvmi.New(
+					libvmi.WithCPUCount(1, 1, vCPUs),
+					libvmi.WithIOThreadsPolicy(v1.IOThreadsPolicySupplementalPool),
+					libvmi.WithIOThreads(v1.DiskIOThreads{SupplementalPoolThreadCount: pointer.P(iothreadCount)}),
+					libvmi.WithDedicatedCPUPlacement(),
+				)
+				for key, value := range vmiAnnotations {
+					libvmi.WithAnnotation(key, value)(vmi)
+				}
+				if isolateEmulator {
+					libvmi.WithIsolateEmulatorThread()(vmi)
+				}
+
+				domain := vmiToDomain(vmi, c)
+
+				isExpectedThreadsLayout := equality.Semantic.DeepEqual(&expectedLayout, domain.Spec.CPUTune)
+				Expect(isExpectedThreadsLayout).To(BeTrue())
+			},
+			Entry("when no emulator thread isolation is used",
+				map[string]string{},
+				false,
+				uint32(2),
+				uint32(2),
+				api.CPUTune{
+					VCPUPin: []api.CPUTuneVCPUPin{
+						{
+							VCPU:   0,
+							CPUSet: "5",
+						},
+						{
+							VCPU:   1,
+							CPUSet: "6",
+						},
+					},
+					IOThreadPin: []api.CPUTuneIOThreadPin{
+						{
+							IOThread: 1,
+							CPUSet:   "7",
+						},
+						{
+							IOThread: 2,
+							CPUSet:   "8",
+						},
+					},
+					EmulatorPin: nil,
+				}),
+			Entry("when EmulatorThreadCompleteToEvenParity is disabled and there is one extra CPU assigned for emulatorThread",
+				map[string]string{},
+				true,
+				uint32(2),
+				uint32(2),
+				api.CPUTune{
+					VCPUPin: []api.CPUTuneVCPUPin{
+						{
+							VCPU:   0,
+							CPUSet: "5",
+						},
+						{
+							VCPU:   1,
+							CPUSet: "6",
+						},
+					},
+					IOThreadPin: []api.CPUTuneIOThreadPin{
+						{
+							IOThread: 1,
+							CPUSet:   "7",
+						},
+						{
+							IOThread: 2,
+							CPUSet:   "8",
+						},
+					},
+					EmulatorPin: &api.CPUEmulatorPin{
+						CPUSet: "9",
+					},
+				}),
+			Entry("when EmulatorThreadCompleteToEvenParity is enabled and there is one extra CPU assigned for emulatorThread (odd CPUs)",
+				map[string]string{v1.EmulatorThreadCompleteToEvenParity: ""},
+				true,
+				uint32(3),
+				uint32(2),
+				api.CPUTune{
+					VCPUPin: []api.CPUTuneVCPUPin{
+						{
+							VCPU:   0,
+							CPUSet: "5",
+						},
+						{
+							VCPU:   1,
+							CPUSet: "6",
+						},
+						{
+							VCPU:   2,
+							CPUSet: "7",
+						},
+					},
+					IOThreadPin: []api.CPUTuneIOThreadPin{
+						{
+							IOThread: 1,
+							CPUSet:   "8",
+						},
+						{
+							IOThread: 2,
+							CPUSet:   "9",
+						},
+					},
+					EmulatorPin: &api.CPUEmulatorPin{
+						CPUSet: "10",
+					},
+				}),
+			Entry("when EmulatorThreadCompleteToEvenParity is enabled and there are two extra CPUs assigned for emulatorThread (even CPUs)",
+				map[string]string{v1.EmulatorThreadCompleteToEvenParity: ""},
+				true,
+				uint32(2),
+				uint32(2),
+				api.CPUTune{
+					VCPUPin: []api.CPUTuneVCPUPin{
+						{
+							VCPU:   0,
+							CPUSet: "5",
+						},
+						{
+							VCPU:   1,
+							CPUSet: "6",
+						},
+					},
+					IOThreadPin: []api.CPUTuneIOThreadPin{
+						{
+							IOThread: 1,
+							CPUSet:   "7",
+						},
+						{
+							IOThread: 2,
+							CPUSet:   "8",
+						},
+					},
+					EmulatorPin: &api.CPUEmulatorPin{
+						CPUSet: "9,10",
+					},
+				}),
+			Entry("when EmulatorThreadCompleteToEvenParity is enabled and there are two extra CPUs assigned for emulatorThread (even CPUs with io+cpu)",
+				map[string]string{v1.EmulatorThreadCompleteToEvenParity: ""},
+				true,
+				uint32(1),
+				uint32(1),
+				api.CPUTune{
+					VCPUPin: []api.CPUTuneVCPUPin{
+						{
+							VCPU:   0,
+							CPUSet: "5",
+						},
+					},
+					IOThreadPin: []api.CPUTuneIOThreadPin{
+						{
+							IOThread: 1,
+							CPUSet:   "6",
+						},
+					},
+					EmulatorPin: &api.CPUEmulatorPin{
+						CPUSet: "7,8",
+					},
+				}),
+		)
+	})
+
 	Describe("newDeviceNamer", func() {
 		DescribeTable("should correctly build prefix map for different disk types",
 			func(volumeStatuses []v1.VolumeStatus, disks []v1.Disk, expectedPrefixes []string, expectedMappings map[string]map[string]string) {
@@ -3596,6 +3744,32 @@ var _ = Describe("Converter", func() {
 			Expect(domainSpec.OS.NVRam.NVRam).To(Equal("/var/lib/libvirt/qemu/nvram/testvmi_VARS.fd"))
 		})
 
+		It("should use firmware auto-selection for EFI Secure Boot", func() {
+			c.EFIConfiguration = &convertertypes.EFIConfiguration{
+				SecureLoader:              true,
+				UsesFirmwareAutoSelection: true,
+			}
+
+			vmi.Spec.Domain.Firmware = &v1.Firmware{
+				Bootloader: &v1.Bootloader{
+					EFI: &v1.EFI{
+						SecureBoot: pointer.P(true),
+					},
+				},
+			}
+			vmi.Status.RuntimeUser = 107
+			domainSpec := vmiToDomainXMLToDomainSpec(vmi, c)
+			Expect(domainSpec.OS.Firmware).To(Equal("efi"))
+			Expect(domainSpec.OS.FirmwareInfo).ToNot(BeNil())
+			Expect(domainSpec.OS.FirmwareInfo.Features).To(HaveLen(2))
+			Expect(domainSpec.OS.FirmwareInfo.Features[0]).To(Equal(api.FirmwareFeature{Enabled: "yes", Name: compute.FirmwareFeatureSecureBoot}))
+			Expect(domainSpec.OS.FirmwareInfo.Features[1]).To(Equal(api.FirmwareFeature{Enabled: "yes", Name: compute.FirmwareFeatureEnrolledKeys}))
+			Expect(domainSpec.OS.BootLoader).To(BeNil())
+			Expect(domainSpec.OS.NVRam).ToNot(BeNil())
+			Expect(domainSpec.OS.NVRam.Format).To(Equal("raw"))
+			Expect(domainSpec.OS.NVRam.NVRam).To(Equal("/var/run/kubevirt-private/libvirt/qemu/nvram/testvmi_VARS.fd"))
+		})
+
 		DescribeTable("display device should be set to", func(arch string, bootloader v1.Bootloader, enableFG bool, expectedDevice string) {
 			vmi.Spec.Domain.Firmware = &v1.Firmware{Bootloader: &bootloader}
 			c = &convertertypes.ConverterContext{
@@ -3700,17 +3874,17 @@ var _ = Describe("Converter", func() {
 					VolumeSource: v1.VolumeSource{
 						ConfigMap: &v1.ConfigMapVolumeSource{},
 					},
-				}, "", nil, "Firmware's volume type is unsupported for slic"),
+				}, "", nil, "firmware's volume type is unsupported for slic"),
 			Entry("msdm with configmap", "", nil,
 				"vol-msdm", &v1.Volume{
 					Name: "vol-msdm",
 					VolumeSource: v1.VolumeSource{
 						ConfigMap: &v1.ConfigMapVolumeSource{},
 					},
-				}, "Firmware's volume type is unsupported for msdm"),
+				}, "firmware's volume type is unsupported for msdm"),
 			// without matching volume source
-			Entry("slic without volume", "vol-slic", &v1.Volume{}, "", &v1.Volume{}, "Firmware's volume for slic was not found"),
-			Entry("msdm without volume", "", &v1.Volume{}, "vol-msdm", &v1.Volume{}, "Firmware's volume for msdm was not found"),
+			Entry("slic without volume", "vol-slic", &v1.Volume{}, "", &v1.Volume{}, "firmware's volume for slic was not found"),
+			Entry("msdm without volume", "", &v1.Volume{}, "vol-msdm", &v1.Volume{}, "firmware's volume for msdm was not found"),
 			// try both togeter, correct input
 			Entry("slic and msdm with secret",
 				"vol-slic", &v1.Volume{
@@ -3924,10 +4098,10 @@ var _ = Describe("Converter", func() {
 					Expect(disk.Source.DataStore.Source).ToNot(BeNil())
 					if isBlock {
 						Expect(disk.Source.DataStore.Type).To(Equal("block"))
-						Expect(disk.Source.DataStore.Source.Dev).To(Equal(GetHotplugBlockDeviceVolumePath(volumeName)))
+						Expect(disk.Source.DataStore.Source.Dev).To(Equal(volumepath.HotplugBlockDevice(volumeName)))
 					} else {
 						Expect(disk.Source.DataStore.Type).To(Equal("file"))
-						Expect(disk.Source.DataStore.Source.File).To(Equal(GetHotplugFilesystemVolumePath(volumeName)))
+						Expect(disk.Source.DataStore.Source.File).To(Equal(volumepath.HotplugFilesystem(volumeName)))
 					}
 				},
 				Entry("filesystem PVC", "test-hotplug-pvc",
@@ -4396,6 +4570,36 @@ var _ = Describe("Converter", func() {
 				BeEmpty(),
 			),
 		)
+	})
+
+	Context("with IOMMUFD", func() {
+		It("should set IOMMUFD on domain when IOMMUFDEnabled is true", func() {
+			vmi := libvmi.New()
+			c := &convertertypes.ConverterContext{
+				Architecture:              archconverter.NewConverter(runtime.GOARCH),
+				AllowEmulation:            true,
+				HypervisorDeviceAvailable: true,
+				IOMMUFDEnabled:            true,
+			}
+			domain := vmiToDomain(vmi, c)
+
+			Expect(domain.Spec.IOMMUFD).NotTo(BeNil())
+			Expect(domain.Spec.IOMMUFD.Enabled).To(Equal("yes"))
+			Expect(domain.Spec.IOMMUFD.FDGroup).To(Equal("iommu"))
+		})
+
+		It("should not set IOMMUFD on domain when IOMMUFDEnabled is false", func() {
+			vmi := libvmi.New()
+			c := &convertertypes.ConverterContext{
+				Architecture:              archconverter.NewConverter(runtime.GOARCH),
+				AllowEmulation:            true,
+				HypervisorDeviceAvailable: true,
+				IOMMUFDEnabled:            false,
+			}
+			domain := vmiToDomain(vmi, c)
+
+			Expect(domain.Spec.IOMMUFD).To(BeNil())
+		})
 	})
 })
 

@@ -37,6 +37,7 @@ import (
 
 	"kubevirt.io/kubevirt/tests/console"
 	"kubevirt.io/kubevirt/tests/decorators"
+	"kubevirt.io/kubevirt/tests/flags"
 	"kubevirt.io/kubevirt/tests/framework/kubevirt"
 	"kubevirt.io/kubevirt/tests/framework/matcher"
 	"kubevirt.io/kubevirt/tests/libnet/cloudinit"
@@ -49,7 +50,6 @@ import (
 var _ = Describe(SIG("Guest Access Credentials", func() {
 
 	const (
-		fedoraRunningTimeout     = libvmops.StartupTimeoutSecondsLarge
 		guestAgentConnectTimeout = 2 * time.Minute
 		denyListTimeout          = 2 * time.Minute
 		fedoraPassword           = "fedora"
@@ -64,11 +64,11 @@ var _ = Describe(SIG("Guest Access Credentials", func() {
 		"my-key3": []byte("ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA6NF8iallvQVp22WDkT test-ssh-key3"),
 	}
 
-	DescribeTable("should have ssh-key under authorized keys added", func(withQEMUAccessCredential bool, options ...libvmi.Option) {
+	DescribeTable("should have ssh-key under authorized keys added", decorators.WgS390x, func(withQEMUAccessCredential bool, options ...libvmi.Option) {
 		By("Creating a secret with three ssh keys")
 		Expect(createNewSecret(testsuite.GetTestNamespace(nil), pubKeySecretID, keysSecretData)).To(Succeed())
 
-		vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewFedora(options...), fedoraRunningTimeout)
+		vmi := libvmops.RunVMIAndExpectLaunch(libvmifact.NewFedora(options...), flags.StartupTimeoutSecondsLarge())
 
 		By("Waiting for agent to connect")
 		Eventually(matcher.ThisVMI(vmi), guestAgentConnectTimeout, 2*time.Second).Should(matcher.HaveConditionTrue(v1.VirtualMachineInstanceAgentConnected))
@@ -128,13 +128,13 @@ var _ = Describe(SIG("Guest Access Credentials", func() {
 			"fedora": []byte(customPassword),
 		}
 
-		It("[test_id:6221]should propagate user password", func() {
+		It("[test_id:6221]should propagate user password", decorators.WgS390x, func() {
 			vmi := libvmifact.NewFedora(libvmi.WithAccessCredentialUserPassword(userPassSecretID))
 
 			By("Creating a secret with custom password")
 			Expect(createNewSecret(testsuite.GetTestNamespace(vmi), userPassSecretID, userPassData)).To(Succeed())
 
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, fedoraRunningTimeout)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsLarge())
 
 			By("Waiting for agent to connect")
 			Eventually(matcher.ThisVMI(vmi), guestAgentConnectTimeout, 2*time.Second).Should(matcher.HaveConditionTrue(v1.VirtualMachineInstanceAgentConnected))
@@ -161,7 +161,7 @@ var _ = Describe(SIG("Guest Access Credentials", func() {
 			By("Creating a secret with an ssh key")
 			Expect(createNewSecret(testsuite.GetTestNamespace(vmi), secretID, secretData)).To(Succeed())
 
-			vmi = libvmops.RunVMIAndExpectLaunch(vmi, fedoraRunningTimeout)
+			vmi = libvmops.RunVMIAndExpectLaunch(vmi, flags.StartupTimeoutSecondsLarge())
 
 			By("Waiting for agent to connect")
 			Eventually(matcher.ThisVMI(vmi), guestAgentConnectTimeout, 2*time.Second).Should(matcher.HaveConditionTrue(v1.VirtualMachineInstanceAgentConnected))
@@ -179,7 +179,7 @@ var _ = Describe(SIG("Guest Access Credentials", func() {
 				libvmi.WithCloudInitNoCloud(libvmici.WithNoCloudUserData(
 					cloudinit.GetFedoraToolsGuestAgentBlacklistUserData("guest-exec,guest-ssh-add-authorized-keys"),
 				))),
-			Entry("[test_id:6223] for user password", userPassSecretID, userPassData,
+			Entry("[test_id:6223] for user password", decorators.WgS390x, userPassSecretID, userPassData,
 				libvmi.WithAccessCredentialUserPassword(userPassSecretID),
 				libvmi.WithCloudInitNoCloud(libvmici.WithNoCloudUserData(
 					cloudinit.GetFedoraToolsGuestAgentBlacklistUserData("guest-set-user-password"),

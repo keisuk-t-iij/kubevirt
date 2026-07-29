@@ -33,8 +33,6 @@ import (
 	"kubevirt.io/kubevirt/tests/libpod"
 )
 
-const MigrationWaitTime = 240
-
 func New(vmiName string, namespace string) *v1.VirtualMachineInstanceMigration {
 	return &v1.VirtualMachineInstanceMigration{
 		TypeMeta: metav1.TypeMeta{
@@ -73,7 +71,7 @@ func ExpectMigrationToSucceed(virtClient kubecli.KubevirtClient, migration *v1.V
 }
 
 func ExpectMigrationToSucceedWithDefaultTimeout(virtClient kubecli.KubevirtClient, migration *v1.VirtualMachineInstanceMigration) *v1.VirtualMachineInstanceMigration {
-	return ExpectMigrationToSucceed(virtClient, migration, MigrationWaitTime)
+	return ExpectMigrationToSucceed(virtClient, migration, flags.MigrationTimeout())
 }
 
 func ExpectMigrationToSucceedWithOffset(offset int, virtClient kubecli.KubevirtClient, migration *v1.VirtualMachineInstanceMigration, timeout int) *v1.VirtualMachineInstanceMigration {
@@ -103,7 +101,7 @@ func ExpectMigrationToSucceedWithOffset(offset int, virtClient kubecli.KubevirtC
 
 func RunDecentralizedMigrationAndExpectToCompleteWithDefaultTimeout(virtClient kubecli.KubevirtClient, sourceMigration, targetMigration *v1.VirtualMachineInstanceMigration) (*v1.VirtualMachineInstanceMigration, *v1.VirtualMachineInstanceMigration) {
 	// increase timeout on decentralized migration.
-	return RunDecentralizedMigrationAndExpectToComplete(virtClient, sourceMigration, targetMigration, MigrationWaitTime*2)
+	return RunDecentralizedMigrationAndExpectToComplete(virtClient, sourceMigration, targetMigration, flags.MigrationTimeout()*2)
 }
 
 func CheckSynchronizationAddressPopulated(virtClient kubecli.KubevirtClient, migration *v1.VirtualMachineInstanceMigration) {
@@ -152,7 +150,7 @@ func RunMigrationAndExpectToComplete(virtClient kubecli.KubevirtClient, migratio
 }
 
 func RunMigrationAndExpectToCompleteWithDefaultTimeout(virtClient kubecli.KubevirtClient, migration *v1.VirtualMachineInstanceMigration) *v1.VirtualMachineInstanceMigration {
-	return RunMigrationAndExpectToComplete(virtClient, migration, MigrationWaitTime)
+	return RunMigrationAndExpectToComplete(virtClient, migration, flags.MigrationTimeout())
 }
 
 func RunMigration(virtClient kubecli.KubevirtClient, migration *v1.VirtualMachineInstanceMigration) *v1.VirtualMachineInstanceMigration {
@@ -438,7 +436,7 @@ func ConfirmVMIPostMigrationFailed(vmi *v1.VirtualMachineInstance, migrationUID 
 	Expect(vmi.Status.MigrationState.EndTimestamp).ToNot(BeNil())
 	Expect(vmi.Status.MigrationState.SourceNode).To(Equal(vmi.Status.NodeName))
 	Expect(vmi.Status.MigrationState.TargetNode).ToNot(Equal(vmi.Status.MigrationState.SourceNode))
-	Expect(vmi.Status.MigrationState.Completed).To(BeFalse())
+	Expect(vmi.Status.MigrationState.Completed).To(BeTrue())
 	Expect(vmi.Status.MigrationState.Failed).To(BeTrue())
 	Expect(vmi.Status.MigrationState.TargetNodeAddress).ToNot(Equal(""))
 	Expect(string(vmi.Status.MigrationState.MigrationUID)).To(Equal(migrationUID))
@@ -463,8 +461,7 @@ func ConfirmVMIPostMigrationAborted(vmi *v1.VirtualMachineInstance, migrationUID
 
 	}, timeout, 1*time.Second).Should(
 		gstruct.MatchFields(gstruct.IgnoreExtras, gstruct.Fields{
-			"Completed":   BeFalse(),
-			"AbortStatus": Equal(v1.MigrationAbortSucceeded),
+			"Completed": BeTrue(),
 		}),
 	)
 
@@ -481,7 +478,9 @@ func ConfirmVMIPostMigrationAborted(vmi *v1.VirtualMachineInstance, migrationUID
 	ExpectWithOffset(1, vmi.Status.MigrationState.TargetNodeAddress).ToNot(Equal(""))
 	ExpectWithOffset(1, string(vmi.Status.MigrationState.MigrationUID)).To(Equal(migrationUID))
 	ExpectWithOffset(1, vmi.Status.MigrationState.Failed).To(BeTrue())
+	ExpectWithOffset(1, vmi.Status.MigrationState.Completed).To(BeTrue())
 	ExpectWithOffset(1, vmi.Status.MigrationState.AbortRequested).To(BeTrue())
+	ExpectWithOffset(1, vmi.Status.MigrationState.AbortStatus).To(Equal(v1.MigrationAbortSucceeded))
 
 	By("Verifying the VMI's is in the running state")
 	ExpectWithOffset(1, vmi).To(matcher.BeInPhase(v1.Running))

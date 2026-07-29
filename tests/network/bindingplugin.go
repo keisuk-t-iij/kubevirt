@@ -75,8 +75,11 @@ var _ = Describe(SIG("network binding plugin", Serial, decorators.NetCustomBindi
 			const (
 				macAddress = "02:00:00:00:00:02"
 			)
-			passtIface := libvmi.InterfaceWithPasstBindingPlugin()
-			passtIface.MacAddress = macAddress
+			passtIface := libvmi.NewInterface(
+				v1.DefaultPodNetwork().Name,
+				libvmi.WithBindingPlugin(v1.PluginBinding{Name: "passt"}),
+				libvmi.WithMac(macAddress),
+			)
 			vmi := libvmifact.NewAlpineWithTestTooling(
 				libvmi.WithInterface(passtIface),
 				libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -132,12 +135,12 @@ var _ = Describe(SIG("network binding plugin", Serial, decorators.NetCustomBindi
 			chosenMAC = chosenMACHW.String()
 
 			ifaceName := "macvtapIface"
-			macvtapIface := libvmi.InterfaceWithBindingPlugin(
-				ifaceName, v1.PluginBinding{Name: macvtapBindingName},
-			)
 			vmi = libvmifact.NewAlpineWithTestTooling(
-				libvmi.WithInterface(
-					libvmi.InterfaceWithMac(macvtapIface, chosenMAC)),
+				libvmi.WithInterface(libvmi.NewInterface(
+					ifaceName,
+					libvmi.WithBindingPlugin(v1.PluginBinding{Name: macvtapBindingName}),
+					libvmi.WithMac(chosenMAC),
+				)),
 				libvmi.WithNetwork(libvmi.MultusNetwork(ifaceName, macvtapNetworkName)))
 
 			namespace := testsuite.GetTestNamespace(nil)
@@ -171,8 +174,9 @@ var _ = Describe(SIG("network binding plugin", Serial, decorators.NetCustomBindi
 		It("can run a virtual machine with one primary managed-tap interface", func() {
 			var vmi *v1.VirtualMachineInstance
 
-			primaryIface := libvmi.InterfaceWithBindingPlugin(
-				networkName, v1.PluginBinding{Name: bindingName},
+			primaryIface := libvmi.NewInterface(
+				networkName,
+				libvmi.WithBindingPlugin(v1.PluginBinding{Name: bindingName}),
 			)
 			vmi = libvmifact.NewAlpineWithTestTooling(
 				libvmi.WithInterface(primaryIface),
@@ -213,9 +217,6 @@ var _ = Describe(SIG("network binding plugin", Serial, decorators.NetCustomBindi
 			_, err := libnet.CreateNetAttachDef(context.Background(), namespace, netAttachDef)
 			Expect(err).ToNot(HaveOccurred())
 
-			primaryIface := libvmi.InterfaceWithBindingPlugin(
-				"mynet1", v1.PluginBinding{Name: bindingName},
-			)
 			primaryNetwork := v1.Network{
 				Name: "mynet1",
 				NetworkSource: v1.NetworkSource{
@@ -225,21 +226,24 @@ var _ = Describe(SIG("network binding plugin", Serial, decorators.NetCustomBindi
 					},
 				},
 			}
-			primaryIface.MacAddress = "de:ad:00:00:be:af"
-			opts := []libvmi.Option{
-				libvmi.WithInterface(primaryIface),
+			serverVMI := libvmifact.NewAlpineWithTestTooling(
+				libvmi.WithInterface(libvmi.NewInterface(
+					"mynet1",
+					libvmi.WithBindingPlugin(v1.PluginBinding{Name: bindingName}),
+					libvmi.WithMac("de:ad:00:00:be:af"),
+				)),
 				libvmi.WithNetwork(&primaryNetwork),
 				libvmi.WithNodeAffinityFor(nodeName),
-			}
-			serverVMI := libvmifact.NewAlpineWithTestTooling(opts...)
-
-			primaryIface.MacAddress = "de:ad:00:00:be:aa"
-			opts = []libvmi.Option{
-				libvmi.WithInterface(primaryIface),
+			)
+			clientVMI := libvmifact.NewAlpineWithTestTooling(
+				libvmi.WithInterface(libvmi.NewInterface(
+					"mynet1",
+					libvmi.WithBindingPlugin(v1.PluginBinding{Name: bindingName}),
+					libvmi.WithMac("de:ad:00:00:be:aa"),
+				)),
 				libvmi.WithNetwork(&primaryNetwork),
 				libvmi.WithNodeAffinityFor(nodeName),
-			}
-			clientVMI := libvmifact.NewAlpineWithTestTooling(opts...)
+			)
 
 			ns := testsuite.GetTestNamespace(nil)
 			serverVMI, err = kubevirt.Client().VirtualMachineInstance(ns).Create(context.Background(), serverVMI, metav1.CreateOptions{})

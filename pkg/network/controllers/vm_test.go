@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	k8sv1 "k8s.io/api/core/v1"
 	k8smetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/testing"
@@ -54,7 +55,7 @@ var _ = Describe("VM Network Controller", func() {
 		updatedNADName2   = "new-nad2"
 	)
 	DescribeTable("sync does nothing when", func(vm *v1.VirtualMachine, vmi *v1.VirtualMachineInstance) {
-		c := controllers.NewVMController(fake.NewSimpleClientset(), stubClusterConfigurer{})
+		c := controllers.NewVMController(fake.NewSimpleClientset())
 		originalVM := vm.DeepCopy()
 		Expect(c.Sync(vm, vmi)).To(Equal(originalVM))
 	},
@@ -97,7 +98,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync fails when VMI patch returns an error", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 
 		// Setup `Patch` to fail.
 		injectedPatchError := errors.New("test patch error")
@@ -129,7 +130,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	DescribeTable("sync succeeds to hotplug new interface", func(ifaceToPlug v1.Interface) {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -177,7 +178,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync does not hotplug a new absent interface", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -217,7 +218,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	DescribeTable("sync succeeds to mark an existing interface for hotunplug", func(currentIfaceState v1.InterfaceState) {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 
 		multusAndDomainInfoSource := vmispec.NewInfoSource(vmispec.InfoSourceMultusStatus, vmispec.InfoSourceDomain)
 
@@ -274,7 +275,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync does not hotplug a new interface when it uses binding other than bridge or SR-IOV", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 
 		vmi := libvmi.New()
 		vm := libvmi.NewVirtualMachine(vmi.DeepCopy())
@@ -303,7 +304,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync succeeds to clear hotunplug interfaces from running VM", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		unpluggedIface := libvmi.InterfaceDeviceWithBridgeBinding("foonet")
 		unpluggedIface.State = v1.InterfaceStateAbsent
 		vmi := libvmi.New(
@@ -339,7 +340,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync succeeds to clear hotunplug interfaces from stopped VM", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		unpluggedIface := libvmi.InterfaceDeviceWithBridgeBinding("foonet")
 		unpluggedIface.State = v1.InterfaceStateAbsent
 		vmi := libvmi.New(
@@ -361,7 +362,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync does not hotunplug interfaces when nameing scheme is unknown", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -405,7 +406,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	DescribeTable("sync updates link state of an existing interface", func(fromState, toState v1.InterfaceState) {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		const defaultNetName = "default"
 		vmi := libvmi.New(
 			libvmi.WithInterface(v1.Interface{
@@ -459,7 +460,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	DescribeTable("sync doesn't update link state if hot-unplug is underway ", func(toState v1.InterfaceState) {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		const defaultNetName = "default"
 		vmi := libvmi.New(
 			libvmi.WithInterface(v1.Interface{
@@ -505,7 +506,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync does not hotunplug interfaces when legacy ordinal interface names are found", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
@@ -560,7 +561,7 @@ var _ = Describe("VM Network Controller", func() {
 		)
 
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 
 		multusAndDomainInfoSource := vmispec.NewInfoSource(vmispec.InfoSourceMultusStatus, vmispec.InfoSourceDomain)
 
@@ -621,7 +622,7 @@ var _ = Describe("VM Network Controller", func() {
 			netToDetachNADName = "detach-me-nad"
 		)
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{})
+		c := controllers.NewVMController(clientset)
 
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
@@ -665,16 +666,25 @@ var _ = Describe("VM Network Controller", func() {
 		Expect(updatedVMI.Spec.Domain.Devices.Interfaces).To(Equal(originalVMI.Spec.Domain.Devices.Interfaces))
 	})
 
-	DescribeTable("sync handles NAD reference updates", func(isFGEnabled bool, expectedNADNameOnVMISpec string) {
+	DescribeTable("sync handles NAD reference updates", func(migratableStatus k8sv1.ConditionStatus, expectedNADName string) {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{isLiveUpdateNADRefEnabled: isFGEnabled})
+		c := controllers.NewVMController(clientset)
 
 		vmi := libvmi.New(
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithMasqueradeBinding()),
 			libvmi.WithInterface(libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetName1)),
 			libvmi.WithNetwork(v1.DefaultPodNetwork()),
 			libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName1, nadName)),
+			libvmistatus.WithStatus(
+				libvmistatus.New(
+					libvmistatus.WithCondition(v1.VirtualMachineInstanceCondition{
+						Type:   v1.VirtualMachineInstanceIsMigratable,
+						Status: migratableStatus,
+					}),
+				),
+			),
 		)
+
 		vm := libvmi.NewVirtualMachine(vmi.DeepCopy())
 
 		_, err := clientset.KubevirtV1().VirtualMachineInstances(vmi.Namespace).Create(context.Background(), vmi, k8smetav1.CreateOptions{})
@@ -691,15 +701,15 @@ var _ = Describe("VM Network Controller", func() {
 			Get(context.Background(), vmi.Name, k8smetav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(updatedVMI.Spec.Networks[1].Multus.NetworkName).To(Equal(expectedNADNameOnVMISpec))
+		Expect(updatedVMI.Spec.Networks[1].Multus.NetworkName).To(Equal(expectedNADName))
 	},
-		Entry("by copying NAD reference to VMI when FG LiveUpdateNADRefEnabled is enabled", true, updatedNADName1),
-		Entry("by not copying NAD reference to VMI when FG LiveUpdateNADRefEnabled is disabled", false, nadName),
+		Entry("by copying NAD reference to VMI for migratable VM", k8sv1.ConditionTrue, updatedNADName1),
+		Entry("by not copying NAD reference to VMI for non-migratable VM", k8sv1.ConditionFalse, nadName),
 	)
 
 	It("sync handles multiple NAD reference updates", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{isLiveUpdateNADRefEnabled: true})
+		c := controllers.NewVMController(clientset)
 
 		By("Creating a new VM)")
 		vmi := libvmi.New(
@@ -711,7 +721,16 @@ var _ = Describe("VM Network Controller", func() {
 			libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName1, nadName)),
 			libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName2, nadName2)),
 			libvmi.WithNetwork(libvmi.MultusNetwork(secondaryNetName3, nadName3)),
+			libvmistatus.WithStatus(
+				libvmistatus.New(
+					libvmistatus.WithCondition(v1.VirtualMachineInstanceCondition{
+						Type:   v1.VirtualMachineInstanceIsMigratable,
+						Status: k8sv1.ConditionTrue,
+					}),
+				),
+			),
 		)
+
 		vm := libvmi.NewVirtualMachine(vmi.DeepCopy())
 
 		_, err := clientset.KubevirtV1().VirtualMachineInstances(vmi.Namespace).Create(context.Background(), vmi, k8smetav1.CreateOptions{})
@@ -750,7 +769,7 @@ var _ = Describe("VM Network Controller", func() {
 
 	It("sync preserves auto-injected Pod network", func() {
 		clientset := fake.NewSimpleClientset()
-		c := controllers.NewVMController(clientset, stubClusterConfigurer{isLiveUpdateNADRefEnabled: true})
+		c := controllers.NewVMController(clientset)
 
 		expectedIfaces := []v1.Interface{libvmi.InterfaceDeviceWithMasqueradeBinding()}
 		expectedNets := []v1.Network{*v1.DefaultPodNetwork()}
@@ -819,12 +838,4 @@ func unplugNetworkInterface(vm *v1.VirtualMachine, netName string) *v1.VirtualMa
 
 func newEmptyVM() *v1.VirtualMachine {
 	return &v1.VirtualMachine{Spec: v1.VirtualMachineSpec{Template: &v1.VirtualMachineInstanceTemplateSpec{}}}
-}
-
-type stubClusterConfigurer struct {
-	isLiveUpdateNADRefEnabled bool
-}
-
-func (s stubClusterConfigurer) LiveUpdateNADRefEnabled() bool {
-	return s.isLiveUpdateNADRefEnabled
 }

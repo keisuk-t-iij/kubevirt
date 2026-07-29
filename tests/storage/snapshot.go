@@ -129,7 +129,7 @@ var _ = Describe(SIG("VirtualMachineSnapshot Tests", func() {
 	Context("With simple VM", func() {
 		BeforeEach(func() {
 			var err error
-			vm = libvmi.NewVirtualMachine(libvmifact.NewCirros())
+			vm = libvmi.NewVirtualMachine(libvmifact.NewAlpineWithTestTooling())
 			vm, err = virtClient.VirtualMachine(testsuite.GetTestNamespace(nil)).Create(context.Background(), vm, metav1.CreateOptions{})
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -889,7 +889,7 @@ var _ = Describe(SIG("VirtualMachineSnapshot Tests", func() {
 				// zero out the times to be able to compare after
 				clearConditionsTimestamps(origStatus.Conditions)
 				ss.Status = nil
-				ss, err = virtClient.VirtualMachineSnapshot(ss.Namespace).UpdateStatus(context.Background(), ss, metav1.UpdateOptions{})
+				ss, err = virtClient.VirtualMachineSnapshot(ss.Namespace).UpdateStatus(context.Background(), ss, metav1.UpdateOptions{}) //nolint:forbidigo
 				Expect(err).ToNot(HaveOccurred())
 				Expect(ss.Status).To(BeNil())
 
@@ -1261,7 +1261,7 @@ var _ = Describe(SIG("VirtualMachineSnapshot Tests", func() {
 			It("[test_id:9705]Should show included and excluded volumes in the snapshot", func() {
 				noSnapshotSC := libstorage.GetNoVolumeSnapshotStorageClass("local")
 				if noSnapshotSC == "" {
-					Skip("Skipping test, no storage class without snapshot support")
+					Skip("Skipping test, no storage class without snapshot support") //nolint:forbidigo
 				}
 				By("Creating DV with snapshot supported storage class")
 				includedDataVolume := libdv.NewDataVolume(

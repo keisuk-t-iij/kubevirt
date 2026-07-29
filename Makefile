@@ -141,7 +141,8 @@ deps-sync:
 	SYNC_VENDOR=true hack/dockerized " ./hack/dep-update.sh --sync-only && ./hack/bazel-generate.sh"
 
 rpm-deps:
-	SYNC_VENDOR=true hack/dockerized "KUBEVIRT_CENTOS_STREAM_VERSION=${KUBEVIRT_CENTOS_STREAM_VERSION} CUSTOM_REPO=${CUSTOM_REPO} SINGLE_ARCH=${SINGLE_ARCH} BASESYSTEM=${BASESYSTEM} LIBVIRT_VERSION=${LIBVIRT_VERSION} QEMU_VERSION=${QEMU_VERSION} SEABIOS_VERSION=${SEABIOS_VERSION} EDK2_VERSION=${EDK2_VERSION} LIBGUESTFS_VERSION=${LIBGUESTFS_VERSION} GUESTFSTOOLS_VERSION=${GUESTFSTOOLS_VERSION} PASST_VERSION=${PASST_VERSION} VIRTIOFSD_VERSION=${VIRTIOFSD_VERSION} SWTPM_VERSION=${SWTPM_VERSION} LIBNBD_VERSION=${LIBNBD_VERSION} ./hack/rpm-deps.sh"
+	SYNC_VENDOR=true hack/dockerized "KUBEVIRT_CENTOS_STREAM_VERSION=${KUBEVIRT_CENTOS_STREAM_VERSION} CUSTOM_REPO=${CUSTOM_REPO} SINGLE_ARCH=${SINGLE_ARCH} BASESYSTEM=${BASESYSTEM} LIBVIRT_VERSION=${LIBVIRT_VERSION} QEMU_VERSION=${QEMU_VERSION} SEABIOS_VERSION=${SEABIOS_VERSION} EDK2_VERSION=${EDK2_VERSION} LIBGUESTFS_VERSION=${LIBGUESTFS_VERSION} GUESTFSTOOLS_VERSION=${GUESTFSTOOLS_VERSION} PASST_VERSION=${PASST_VERSION} VIRTIOFSD_VERSION=${VIRTIOFSD_VERSION} SWTPM_VERSION=${SWTPM_VERSION} LIBNBD_VERSION=${LIBNBD_VERSION} KUBEVIRT_CROSS_ARCH_EMULATION=${KUBEVIRT_CROSS_ARCH_EMULATION} ./hack/rpm-deps.sh"
+	$(MAKE) generate
 
 rpm-deps-cs9:
 	$(MAKE) rpm-deps KUBEVIRT_CENTOS_STREAM_VERSION=9
@@ -234,6 +235,7 @@ fmt: format
 
 lint:
 	hack/dockerized "hack/lint-test-cleanup-label.sh"
+	hack/dockerized "hack/lint-newcirros-deprecation.sh"
 	hack/dockerized "hack/golangci-lint.sh"
 	hack/dockerized "monitoringlinter ./pkg/..."
 	hack/dockerized "hack/license-header-check.sh"
@@ -248,6 +250,10 @@ gofumpt:
 
 update-generated-api-testdata:
 	./hack/update-generated-api-testdata.sh
+
+feature-gate-report:
+	hack/dockerized "bazel build //tools/feature-gate-report && \
+		./bazel-bin/tools/feature-gate-report/feature-gate-report_/feature-gate-report $(FEATURE_GATE_REPORT_ARGS)"
 
 vmlog-checker:
 	@echo "Building vmlog-checker..."
@@ -296,5 +302,6 @@ vmlog-checker:
 	rpm-deps-cs9 \
 	rpm-deps-cs10 \
 	rpm-deps-all \
+	feature-gate-report \
 	vmlog-checker \
 	$(NULL)

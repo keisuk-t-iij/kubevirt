@@ -39,8 +39,10 @@ type ControllersDomainConfigurator struct {
 	isUSBNeeded               bool
 	scsiModel                 string
 	autoThreads               uint
-	controllerDriver          *api.ControllerDriver
+	useLaunchSecuritySEV      bool
+	useLaunchSecurityPV       bool
 	supportPCIHole64Disabling bool
+	virtioSerialModel         string
 }
 
 type controllersOption func(*ControllersDomainConfigurator)
@@ -58,13 +60,27 @@ func NewControllersDomainConfigurator(options ...controllersOption) ControllersD
 func (c ControllersDomainConfigurator) Configure(vmi *v1.VirtualMachineInstance, domain *api.Domain) error {
 	domain.Spec.Devices.Controllers = append(domain.Spec.Devices.Controllers, newUSBController(c.isUSBNeeded))
 
+	var controllerDriver *api.ControllerDriver
+	if c.useLaunchSecuritySEV || c.useLaunchSecurityPV {
+		controllerDriver = &api.ControllerDriver{
+			IOMMU: "on",
+		}
+	}
+
 	if requiresSCSIController(vmi) {
-		scsiControllerDriver := assignSCSIControllerIOThread(vmi, uint(c.autoThreads), c.controllerDriver.DeepCopy())
+		scsiControllerDriver := assignSCSIControllerIOThread(vmi, c.autoThreads, controllerDriver.DeepCopy())
 		domain.Spec.Devices.Controllers = append(domain.Spec.Devices.Controllers, newSCSIController(c.scsiModel, scsiControllerDriver))
 	}
 
 	if c.supportPCIHole64Disabling && shouldDisablePCIHole64(vmi) {
 		domain.Spec.Devices.Controllers = append(domain.Spec.Devices.Controllers, newPCIControllerWithHole64Disabled())
+	}
+
+	if requiresVirtioSerialController(vmi) {
+		domain.Spec.Devices.Controllers = append(
+			domain.Spec.Devices.Controllers,
+			newVirtioSerialController(c.virtioSerialModel, controllerDriver),
+		)
 	}
 
 	return nil
@@ -88,15 +104,27 @@ func ControllersWithSCSIIOThreads(autoThreads uint) controllersOption {
 	}
 }
 
-func ControllersWithControllerDriver(controllerDriver *api.ControllerDriver) controllersOption {
+func ControllersWithUseLaunchSecuritySEV(useLaunchSecuritySEV bool) controllersOption {
 	return func(c *ControllersDomainConfigurator) {
-		c.controllerDriver = controllerDriver
+		c.useLaunchSecuritySEV = useLaunchSecuritySEV
+	}
+}
+
+func ControllersWithUseLaunchSecurityPV(useLaunchSecurityPV bool) controllersOption {
+	return func(c *ControllersDomainConfigurator) {
+		c.useLaunchSecurityPV = useLaunchSecurityPV
 	}
 }
 
 func ControllersWithSupportPCIHole64Disabling(support bool) controllersOption {
 	return func(c *ControllersDomainConfigurator) {
 		c.supportPCIHole64Disabling = support
+	}
+}
+
+func ControllersWithVirtioSerialModel(model string) controllersOption {
+	return func(c *ControllersDomainConfigurator) {
+		c.virtioSerialModel = model
 	}
 }
 
@@ -135,11 +163,24 @@ func newPCIControllerWithHole64Disabled() api.Controller {
 	}
 }
 
+func newVirtioSerialController(model string, controllerDriver *api.ControllerDriver) api.Controller {
+	return api.Controller{
+		Type:   "virtio-serial",
+		Index:  "0",
+		Model:  model,
+		Driver: controllerDriver,
+	}
+}
+
 func shouldDisablePCIHole64(vmi *v1.VirtualMachineInstance) bool {
 	if val, ok := vmi.Annotations[v1.DisablePCIHole64]; ok {
 		return strings.EqualFold(val, "true")
 	}
 	return false
+}
+
+func requiresVirtioSerialController(vmi *v1.VirtualMachineInstance) bool {
+	return vmi.Spec.Domain.Devices.AutoattachSerialConsole == nil || *vmi.Spec.Domain.Devices.AutoattachSerialConsole
 }
 
 func requiresSCSIController(vmi *v1.VirtualMachineInstance) bool {
@@ -175,7 +216,11 @@ func shouldConfigSCSIThread(vmi *v1.VirtualMachineInstance) bool {
 	})
 }
 
-func assignSCSIControllerIOThread(vmi *v1.VirtualMachineInstance, autoThreads uint, scsiControllerDriver *api.ControllerDriver) *api.ControllerDriver {
+func assignSCSIControllerIOThread(
+	vmi *v1.VirtualMachineInstance,
+	autoThreads uint,
+	scsiControllerDriver *api.ControllerDriver,
+) *api.ControllerDriver {
 	if autoThreads == 0 || !shouldConfigSCSIThread(vmi) {
 		return scsiControllerDriver
 	}

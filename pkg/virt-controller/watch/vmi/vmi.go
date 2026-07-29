@@ -45,7 +45,6 @@ import (
 	traceUtils "kubevirt.io/kubevirt/pkg/util/trace"
 	virtconfig "kubevirt.io/kubevirt/pkg/virt-config"
 	"kubevirt.io/kubevirt/pkg/virt-controller/watch/topology"
-	"kubevirt.io/kubevirt/pkg/virt-controller/watch/vsock"
 )
 
 const (
@@ -74,6 +73,7 @@ func NewController(templateService templateService,
 	netStatusUpdater statusUpdater,
 	netSpecValidator specValidator,
 	netMigrationEvaluator migrationEvaluator,
+	vsockCIDAllocator vsockAllocator,
 	additionalLauncherAnnotationsSync []string,
 	additionalLauncherLabelsSync []string,
 ) (*Controller, error) {
@@ -99,7 +99,7 @@ func NewController(templateService templateService,
 		cdiConfigStore:                    cdiConfigInformer.GetStore(),
 		clusterConfig:                     clusterConfig,
 		topologyHinter:                    topologyHinter,
-		cidsMap:                           vsock.NewCIDsMap(),
+		cidsMap:                           vsockCIDAllocator,
 		backendStorage:                    backendstorage.NewBackendStorage(clientset, clusterConfig, storageClassInformer.GetStore(), storageProfileInformer.GetStore(), pvcInformer.GetIndexer()),
 		netAnnotationsGenerator:           netAnnotationsGenerator,
 		storageAnnotationsGenerator:       storageAnnotationsGenerator,
@@ -147,15 +147,6 @@ func NewController(templateService templateService,
 	_, err = pvcInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addPVC,
 		UpdateFunc: c.updatePVC,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// NOTE: this is temporary to support ephemeral hotplug volume metrics
-	// will be removed once DeclarativeHotplugVolumes feature gate is enabled by default
-	_, err = vmInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		UpdateFunc: c.updateVM,
 	})
 	if err != nil {
 		return nil, err
@@ -219,6 +210,12 @@ type migrationEvaluator interface {
 	Evaluate(vmi *virtv1.VirtualMachineInstance, pod *k8sv1.Pod) k8sv1.ConditionStatus
 }
 
+type vsockAllocator interface {
+	Sync(vmis []*virtv1.VirtualMachineInstance)
+	Allocate(vmi *virtv1.VirtualMachineInstance) error
+	Remove(key string)
+}
+
 type Controller struct {
 	templateService                   templateService
 	clientset                         kubecli.KubevirtClient
@@ -237,7 +234,7 @@ type Controller struct {
 	cdiStore                          cache.Store
 	cdiConfigStore                    cache.Store
 	clusterConfig                     *virtconfig.ClusterConfig
-	cidsMap                           vsock.Allocator
+	cidsMap                           vsockAllocator
 	backendStorage                    *backendstorage.BackendStorage
 	hasSynced                         func() bool
 	netAnnotationsGenerator           annotationsGenerator
@@ -343,6 +340,9 @@ func (c *Controller) execute(key string) error {
 	needsSync := c.podExpectations.SatisfiedExpectations(key) && c.vmiExpectations.SatisfiedExpectations(key) && c.pvcExpectations.SatisfiedExpectations(key)
 
 	if !needsSync {
+		// Re-enqueue so a missed expectation event (for example an attachment pod deletion)
+		// can't delay the sync until the next informer resync.
+		c.Queue.AddAfter(key, controller.ExpectationsTimeout)
 		return nil
 	}
 
@@ -466,7 +466,13 @@ func (c *Controller) onPodDelete(obj interface{}) {
 	controllerRef := v1.GetControllerOf(pod)
 	vmi := c.resolveControllerRef(pod.Namespace, controllerRef)
 	if vmi == nil {
-		return
+		// Recover the VMI from the owner annotations as a fallback strategy.
+		// Not all pods can have VMI ref at annotations, this is ok.
+		vmi = c.recoverVMIFromPodAnnotations(pod)
+		if vmi == nil {
+			return
+		}
+		log.Log.Object(pod).V(3).Infof("recovered owner VMI %s from pod annotations", vmi.Name)
 	}
 	vmiKey, err := controller.KeyFunc(vmi)
 	if err != nil {
@@ -474,6 +480,30 @@ func (c *Controller) onPodDelete(obj interface{}) {
 	}
 	c.podExpectations.DeletionObserved(vmiKey, controller.PodKey(pod))
 	c.enqueueVirtualMachine(vmi)
+}
+
+// recoverVMIFromPodAnnotations is the fallback for when the owner chain cannot be
+// resolved; it recovers the VMI from the owner identity annotations on the pod.
+func (c *Controller) recoverVMIFromPodAnnotations(pod *k8sv1.Pod) *virtv1.VirtualMachineInstance {
+	name := pod.Annotations[virtv1.OwnerVMINameAnnotation]
+	uid := pod.Annotations[virtv1.OwnerVMIUIDAnnotation]
+	if name == "" || uid == "" {
+		return nil
+	}
+	obj, exists, err := c.vmiIndexer.GetByKey(controller.NamespacedKey(pod.Namespace, name))
+	if err != nil {
+		log.Log.Object(pod).Reason(err).Error("failed to look up owner VMI from indexer")
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	vmi := obj.(*virtv1.VirtualMachineInstance)
+	if string(vmi.UID) != uid {
+		log.Log.Object(pod).Warningf("owner VMI UID mismatch while recovering from pod annotations: expected %s, got %s", uid, vmi.UID)
+		return nil
+	}
+	return vmi
 }
 
 func (c *Controller) addVirtualMachineInstance(obj interface{}) {

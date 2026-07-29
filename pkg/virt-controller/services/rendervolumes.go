@@ -253,7 +253,8 @@ func withImageVolumes(vmi *v1.VirtualMachineInstance) VolumeRendererOption {
 			renderer.addKernelBootVolumeMount()
 		}
 
-		if shouldAddLauncherBinaryVolume(vmi, renderer.imageIDs) {
+		if vmi.Annotations[v1.ImageVolumeSkipDigestResolutionAnnotation] != "true" &&
+			shouldAddLauncherBinaryVolume(vmi, renderer.imageIDs) {
 			renderer.addLauncherBinaryVolume()
 		}
 
@@ -477,6 +478,17 @@ func withSidecarVolumes(hookSidecars hooks.HookSidecarList) VolumeRendererOption
 	}
 }
 
+func withPluginSocketVolume() VolumeRendererOption {
+	return func(renderer *VolumeRenderer) error {
+		renderer.podVolumes = append(renderer.podVolumes, emptyDirVolume(pluginSocketsVolumeName))
+		renderer.podVolumeMounts = append(renderer.podVolumeMounts, k8sv1.VolumeMount{
+			Name:      pluginSocketsVolumeName,
+			MountPath: pluginSocketsDir,
+		})
+		return nil
+	}
+}
+
 func withVirioFS() VolumeRendererOption {
 	return func(renderer *VolumeRenderer) error {
 		renderer.podVolumeMounts = append(renderer.podVolumeMounts, mountPath(virtiofs.VirtioFSContainers, virtiofs.VirtioFSContainersMountBaseDir))
@@ -505,7 +517,9 @@ func withHugepages() VolumeRendererOption {
 		renderer.podVolumes = append(renderer.podVolumes, k8sv1.Volume{
 			Name: "hugetblfs-dir",
 			VolumeSource: k8sv1.VolumeSource{
-				EmptyDir: &k8sv1.EmptyDirVolumeSource{},
+				EmptyDir: &k8sv1.EmptyDirVolumeSource{
+					Medium: k8sv1.StorageMediumHugePages,
+				},
 			},
 		})
 		renderer.podVolumeMounts = append(renderer.podVolumeMounts, k8sv1.VolumeMount{
@@ -549,15 +563,6 @@ func imgPullSecrets(volumes ...v1.Volume) []k8sv1.LocalObjectReference {
 		}
 	}
 	return imagePullSecrets
-}
-
-func serviceAccount(volumes ...v1.Volume) string {
-	for _, volume := range volumes {
-		if volume.ServiceAccount != nil {
-			return volume.ServiceAccount.ServiceAccountName
-		}
-	}
-	return ""
 }
 
 func (vr *VolumeRenderer) addPVCToLaunchManifest(pvcStore cache.Store, volume v1.Volume, claimName string) error {

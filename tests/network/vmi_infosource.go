@@ -41,6 +41,7 @@ import (
 	"kubevirt.io/kubevirt/tests/framework/kubevirt"
 	"kubevirt.io/kubevirt/tests/framework/matcher"
 	"kubevirt.io/kubevirt/tests/libnet"
+	"kubevirt.io/kubevirt/tests/libnet/cluster"
 	"kubevirt.io/kubevirt/tests/libvmifact"
 	"kubevirt.io/kubevirt/tests/libwait"
 	"kubevirt.io/kubevirt/tests/testsuite"
@@ -79,14 +80,23 @@ var _ = Describe(SIG("Infosource", func() {
 			_, err := libnet.CreateNetAttachDef(context.Background(), testsuite.NamespaceTestDefault, netAttachDef)
 			Expect(err).NotTo(HaveOccurred())
 
-			defaultBridgeInterface := libvmi.InterfaceDeviceWithBridgeBinding(primaryNetwork)
-			secondaryLinuxBridgeInterface1 := libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetwork1.Name)
-			secondaryLinuxBridgeInterface2 := libvmi.InterfaceDeviceWithBridgeBinding(secondaryNetwork2.Name)
 			vmiSpec := libvmifact.NewFedora(
-				libvmi.WithInterface(libvmi.InterfaceWithMac(defaultBridgeInterface, primaryInterfaceMac)),
+				libvmi.WithInterface(libvmi.NewInterface(
+					primaryNetwork,
+					libvmi.WithBridgeBinding(),
+					libvmi.WithMac(primaryInterfaceMac),
+				)),
 				libvmi.WithNetwork(v1.DefaultPodNetwork()),
-				libvmi.WithInterface(libvmi.InterfaceWithMac(secondaryLinuxBridgeInterface1, secondaryInterface1Mac)),
-				libvmi.WithInterface(libvmi.InterfaceWithMac(secondaryLinuxBridgeInterface2, secondaryInterface2Mac)),
+				libvmi.WithInterface(libvmi.NewInterface(
+					secondaryNetwork1.Name,
+					libvmi.WithBridgeBinding(),
+					libvmi.WithMac(secondaryInterface1Mac),
+				)),
+				libvmi.WithInterface(libvmi.NewInterface(
+					secondaryNetwork2.Name,
+					libvmi.WithBridgeBinding(),
+					libvmi.WithMac(secondaryInterface2Mac),
+				)),
 				libvmi.WithNetwork(secondaryNetwork1),
 				libvmi.WithNetwork(secondaryNetwork2),
 				libvmi.WithCloudInitNoCloud(libvmici.WithNoCloudUserData(manipulateGuestLinksScript(primaryInterfaceNewMac, dummyInterfaceMac))))
@@ -157,7 +167,12 @@ var _ = Describe(SIG("Infosource", func() {
 
 			networkInterface := netvmispec.LookupInterfaceStatusByMac(vmi.Status.Interfaces, primaryInterfaceMac)
 			Expect(networkInterface).NotTo(BeNil(), "interface not found")
-			Expect(networkInterface.IP).NotTo(BeEmpty())
+
+			supportsIpv4, err := cluster.SupportsIpv4()
+			Expect(err).NotTo(HaveOccurred())
+			if supportsIpv4 {
+				Expect(networkInterface.IP).NotTo(BeEmpty(), "IP address not present in IPv4 cluster for MAC %s", networkInterface.MAC)
+			}
 
 			guestInterface := netvmispec.LookupInterfaceStatusByMac(vmi.Status.Interfaces, primaryInterfaceNewMac)
 			Expect(guestInterface).NotTo(BeNil(), "interface not found")

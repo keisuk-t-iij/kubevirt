@@ -32,12 +32,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -46,8 +44,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/coreos/go-semver/semver"
-	jsonpatch "github.com/evanphx/json-patch"
-	"github.com/google/go-github/v32/github"
+	"github.com/google/go-github/v83/github"
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 
 	appsv1 "k8s.io/api/apps/v1"
 	k8sv1 "k8s.io/api/core/v1"
@@ -107,6 +105,7 @@ import (
 	"kubevirt.io/kubevirt/tests/libvmifact"
 	"kubevirt.io/kubevirt/tests/libwait"
 	"kubevirt.io/kubevirt/tests/operator/resourcefiles"
+	"kubevirt.io/kubevirt/tests/operator/version"
 	"kubevirt.io/kubevirt/tests/testsuite"
 )
 
@@ -374,7 +373,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			service.Spec.Ports[0].Port = 123
 
 			By("Update service with undesired port")
-			service, err = virtClient.CoreV1().Services(originalKv.Namespace).Update(context.Background(), service, metav1.UpdateOptions{})
+			service, err = virtClient.CoreV1().Services(originalKv.Namespace).Update(context.Background(), service, metav1.UpdateOptions{}) //nolint:forbidigo
 			Expect(err).ToNot(HaveOccurred())
 			Expect(service.Spec.Ports[0].Port).To(Equal(int32(123)))
 
@@ -608,7 +607,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			kv, err := virtClient.KubeVirt(originalKv.Namespace).Get(context.Background(), originalKv.Name, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			kv.Spec.ImagePullSecrets = imagePullSecrets
-			kv, err = virtClient.KubeVirt(originalKv.Namespace).Update(context.Background(), kv, metav1.UpdateOptions{})
+			kv, err = virtClient.KubeVirt(originalKv.Namespace).Update(context.Background(), kv, metav1.UpdateOptions{}) //nolint:forbidigo
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for virt-operator to apply changes to component")
@@ -630,7 +629,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			kv, err = virtClient.KubeVirt(originalKv.Namespace).Get(context.Background(), originalKv.Name, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
 			kv.Spec.ImagePullSecrets = []k8sv1.LocalObjectReference{}
-			kv, err = virtClient.KubeVirt(originalKv.Namespace).Update(context.Background(), kv, metav1.UpdateOptions{})
+			kv, err = virtClient.KubeVirt(originalKv.Namespace).Update(context.Background(), kv, metav1.UpdateOptions{}) //nolint:forbidigo
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Waiting for virt-operator to apply changes to component")
@@ -646,17 +645,48 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 	Describe("[rfe_id:2291][crit:high][vendor:cnv-qe@redhat.com][level:component]should update kubevirt", decorators.Upgrade, func() {
 		runStrategyHalted := v1.RunStrategyHalted
 
+		const (
+			fromY = iota
+			fromZ
+		)
+
 		// This test is installing a previous release of KubeVirt
 		// running a VM/VMI using that previous release
 		// Updating KubeVirt to the target tested code
 		// Ensuring VM/VMI is still operational after the update from previous release.
-		DescribeTable("[release-blocker][test_id:3145]from previous release to target tested release", func(updateOperator bool) {
+		DescribeTable("[release-blocker][test_id:3145]to target tested release", func(previousRelease int, updateOperator bool) {
 			if !libstorage.HasCDI() {
 				Fail("Fail update test when CDI is not present")
 			}
 
 			if updateOperator && flags.OperatorManifestPath == "" {
 				Fail("operator manifest path must be configured for update tests")
+			}
+
+			previousImageTag := flags.PreviousReleaseTag
+			previousImageRegistry := flags.PreviousReleaseRegistry
+
+			// The z-1 release upgrade tests will be skipped if:
+			// - previousImageTag is explicitly set
+			// - z-1 is equal to y-1
+			if previousImageTag == "" {
+				prevY, prevZ, err := version.DetectLatestYAndZOfficialTags()
+				Expect(err).ToNot(HaveOccurred())
+				if previousRelease == fromZ && (prevZ == "" || prevY == prevZ) {
+					Skip("Skip z-1 upgrade test because it is already covered by y-1")
+				}
+				switch previousRelease {
+				case fromY:
+					previousImageTag = prevY
+				case fromZ:
+					previousImageTag = prevZ
+				}
+				By(fmt.Sprintf("Using detected tag %s for previous kubevirt", previousImageTag))
+			} else {
+				if previousRelease == fromZ {
+					Skip("Skip z-1 upgrade test because the previous tag is explicitly set")
+				}
+				By(fmt.Sprintf("Using user defined tag %s for previous kubevirt", previousImageTag))
 			}
 
 			// This test should run fine on single-node setups as long as no VM is created pre-update
@@ -669,15 +699,6 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			if createVMs {
 				migratableVMIs, err = generateMigratableVMIs(2)
 				Expect(err).NotTo(HaveOccurred())
-			}
-			previousImageTag := flags.PreviousReleaseTag
-			previousImageRegistry := flags.PreviousReleaseRegistry
-			if previousImageTag == "" {
-				previousImageTag, err = detectLatestUpstreamOfficialTag()
-				Expect(err).ToNot(HaveOccurred())
-				By(fmt.Sprintf("By Using detected tag %s for previous kubevirt", previousImageTag))
-			} else {
-				By(fmt.Sprintf("By Using user defined tag %s for previous kubevirt", previousImageTag))
 			}
 
 			curVersion := originalKv.Status.ObservedKubeVirtVersion
@@ -731,7 +752,30 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 					updatedFeatureGates = append(updatedFeatureGates, fg)
 				}
 			}
+			// Old releases don't support Beta-on-by-default, so Snapshot must be
+			// explicitly listed for the previous release's webhook to accept
+			// snapshot creation.
+			updatedFeatureGates = append(updatedFeatureGates, featuregate.SnapshotGate)
 			kv.Spec.Configuration.DeveloperConfiguration.FeatureGates = updatedFeatureGates
+
+			// ImageVolume requires k8s 1.35+ (kubelet image volume support).
+			// Disable it on older clusters so the new virt-launcher doesn't
+			// panic looking for image-volume paths after the upgrade.
+			k8sVersion, err := checks.GetKubernetesVersion()
+			Expect(err).ToNot(HaveOccurred())
+			if semver.New(k8sVersion).LessThan(*semver.New("1.35.0")) {
+				kv.Spec.Configuration.DeveloperConfiguration.DisabledFeatureGates = append(
+					kv.Spec.Configuration.DeveloperConfiguration.DisabledFeatureGates,
+					featuregate.ImageVolume,
+				)
+			}
+
+			// No external net resource injection controller in the test environment.
+			kv.Spec.Configuration.DeveloperConfiguration.DisabledFeatureGates = append(
+				kv.Spec.Configuration.DeveloperConfiguration.DisabledFeatureGates,
+				featuregate.ExternalNetResourceInjection,
+			)
+
 			// Now create the kubevirt CR
 			createKv(kv)
 
@@ -840,6 +884,31 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 
 			By("Verifying infrastructure Is Updated")
 			allKvInfraPodsAreReady(kv)
+
+			By("Verifying RBAC aggregate labels are preserved after upgrade")
+			verifyAggregateLabels(virtClient, "true")
+
+			By("Setting RoleAggregationStrategy to Manual after upgrade")
+			currentKV := libkubevirt.GetCurrentKv(virtClient)
+			savedConfig := currentKV.Spec.Configuration.DeepCopy()
+			if currentKV.Spec.Configuration.DeveloperConfiguration == nil {
+				currentKV.Spec.Configuration.DeveloperConfiguration = &v1.DeveloperConfiguration{}
+			}
+			currentKV.Spec.Configuration.DeveloperConfiguration.FeatureGates = append(
+				currentKV.Spec.Configuration.DeveloperConfiguration.FeatureGates,
+				featuregate.OptOutRoleAggregation,
+			)
+			currentKV.Spec.Configuration.RoleAggregationStrategy = pointer.P(v1.RoleAggregationStrategyManual)
+			kvconfig.UpdateKubeVirtConfigValueAndWait(currentKV.Spec.Configuration)
+
+			By("Verifying aggregate labels are set to false after upgrade with Manual strategy")
+			verifyAggregateLabels(virtClient, "false")
+
+			By("Restoring RoleAggregationStrategy to default after upgrade verification")
+			kvconfig.UpdateKubeVirtConfigValueAndWait(*savedConfig)
+
+			By("Verifying aggregate labels are restored after upgrade")
+			verifyAggregateLabels(virtClient, "true")
 
 			// Verify console connectivity to VMI still works and stop VM
 			for _, vmYaml := range vmYamls {
@@ -977,8 +1046,10 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			By("Deleting KubeVirt object")
 			deleteAllKvAndWait(false, originalKv.Name)
 		},
-			Entry("by patching KubeVirt CR", false),
-			Entry("by updating virt-operator", true),
+			Entry("[QUARANTINE]from previous y release by patching KubeVirt CR", decorators.Quarantine, fromY, false),
+			Entry("[QUARANTINE]from previous y release by updating virt-operator", decorators.Quarantine, fromY, true),
+			Entry("from previous z release by patching KubeVirt CR", fromZ, false),
+			Entry("from previous z release by updating virt-operator", fromZ, true),
 		)
 	})
 
@@ -1421,7 +1492,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 
 		BeforeEach(func() {
 			if !prometheusRuleEnabled() {
-				Skip("Test applies on when PrometheusRule is defined")
+				Skip("Test applies on when PrometheusRule is defined") //nolint:forbidigo
 			}
 		})
 
@@ -1440,7 +1511,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 
 		BeforeEach(func() {
 			if !serviceMonitorEnabled() {
-				Skip("Test requires ServiceMonitor to be valid")
+				Skip("Test requires ServiceMonitor to be valid") //nolint:forbidigo
 			}
 		})
 
@@ -2227,7 +2298,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 					},
 				}
 
-				instancetype, err = virtClient.VirtualMachineClusterInstancetype().Update(context.Background(), instancetype, metav1.UpdateOptions{})
+				instancetype, err = virtClient.VirtualMachineClusterInstancetype().Update(context.Background(), instancetype, metav1.UpdateOptions{}) //nolint:forbidigo
 				Expect(err).ToNot(HaveOccurred())
 				Expect(instancetype.Annotations).To(HaveKeyWithValue(keyTest, valModified))
 				Expect(instancetype.Labels).To(HaveKeyWithValue(keyTest, valModified))
@@ -2258,7 +2329,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 					},
 				}
 
-				preference, err = virtClient.VirtualMachineClusterPreference().Update(context.Background(), preference, metav1.UpdateOptions{})
+				preference, err = virtClient.VirtualMachineClusterPreference().Update(context.Background(), preference, metav1.UpdateOptions{}) //nolint:forbidigo
 				Expect(err).ToNot(HaveOccurred())
 				Expect(preference.Annotations).To(HaveKeyWithValue(keyTest, valModified))
 				Expect(preference.Labels).To(HaveKeyWithValue(keyTest, valModified))
@@ -2279,6 +2350,23 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 	})
 
 	Context("virt-template deployment", func() {
+		var fgDisabled bool
+
+		BeforeEach(func() {
+			fgDisabled = !checks.HasFeature(featuregate.Template)
+			if fgDisabled {
+				kvconfig.EnableFeatureGate(featuregate.Template)
+			}
+		})
+
+		AfterEach(func() {
+			if fgDisabled {
+				kvconfig.DisableFeatureGate(featuregate.Template)
+			} else {
+				kvconfig.EnableFeatureGate(featuregate.Template)
+			}
+		})
+
 		setVirtTemplateDeploymentEnabled := func(enabled bool) {
 			kv := libkubevirt.GetCurrentKv(kubevirt.Client())
 			kv.Spec.Configuration.VirtTemplateDeployment = &v1.VirtTemplateDeployment{
@@ -2290,9 +2378,7 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 		// Note: virt-template requires the Snapshot feature gate for full functionality,
 		// but these tests only verify deployment/removal behavior.
 		DescribeTable("should deploy and remove virt-template", func(setup func(), enable func(), disable func()) {
-			if setup != nil {
-				setup()
-			}
+			setup()
 
 			By("Ensuring virt-template deployments do not exist initially")
 			eventuallyVirtTemplateDeploymentsNotFound()
@@ -2310,15 +2396,12 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 			eventuallyVirtTemplateDeploymentsNotFound()
 		},
 			Entry("when feature gate is toggled",
-				nil,
+				func() { kvconfig.DisableFeatureGate(featuregate.Template) },
 				func() { kvconfig.EnableFeatureGate(featuregate.Template) },
 				func() { kvconfig.DisableFeatureGate(featuregate.Template) },
 			),
 			Entry("when VirtTemplateDeployment.Enabled is toggled",
-				func() {
-					setVirtTemplateDeploymentEnabled(false)
-					kvconfig.EnableFeatureGate(featuregate.Template)
-				},
+				func() { setVirtTemplateDeploymentEnabled(false) },
 				func() { setVirtTemplateDeploymentEnabled(true) },
 				func() { setVirtTemplateDeploymentEnabled(false) },
 			),
@@ -2465,52 +2548,24 @@ var _ = Describe("[sig-operator]Operator", Serial, decorators.SigOperator, func(
 	})
 
 	Context("RoleAggregationStrategy", func() {
-		clusterRolesWithAggregateLabels := map[string]string{
-			rbac.ClusterRoleAdmin: "rbac.authorization.k8s.io/aggregate-to-admin",
-			rbac.ClusterRoleEdit:  "rbac.authorization.k8s.io/aggregate-to-edit",
-			rbac.ClusterRoleView:  "rbac.authorization.k8s.io/aggregate-to-view",
-		}
-
 		It("should disable aggregate labels when set to Manual and restore them when set to AggregateToDefault", func() {
 			By("Verifying aggregate labels are present by default")
-			for name, labelKey := range clusterRolesWithAggregateLabels {
-				clusterRole, err := kubevirt.Client().RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
-				Expect(clusterRole.Labels).To(HaveKeyWithValue(labelKey, "true"),
-					"ClusterRole %s should have label %s", name, labelKey)
-			}
+			verifyAggregateLabels(kubevirt.Client(), "true")
 
-			By("Setting RoleAggregationStrategy to Manual with OptOutRoleAggregation feature gate")
+			By("Setting RoleAggregationStrategy to Manual (OptOutRoleAggregation is Beta, enabled by default)")
 			currentKV := libkubevirt.GetCurrentKv(kubevirt.Client())
-			if currentKV.Spec.Configuration.DeveloperConfiguration == nil {
-				currentKV.Spec.Configuration.DeveloperConfiguration = &v1.DeveloperConfiguration{}
-			}
-			currentKV.Spec.Configuration.DeveloperConfiguration.FeatureGates = append(
-				currentKV.Spec.Configuration.DeveloperConfiguration.FeatureGates,
-				featuregate.OptOutRoleAggregation,
-			)
 			currentKV.Spec.Configuration.RoleAggregationStrategy = pointer.P(v1.RoleAggregationStrategyManual)
 			kv := kvconfig.UpdateKubeVirtConfigValueAndWait(currentKV.Spec.Configuration)
 
 			By("Verifying aggregate labels are set to false")
-			for name, labelKey := range clusterRolesWithAggregateLabels {
-				clusterRole, err := kubevirt.Client().RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
-				Expect(clusterRole.Labels).To(HaveKeyWithValue(labelKey, "false"),
-					"ClusterRole %s should have label %s set to false when RoleAggregationStrategy is Manual", name, labelKey)
-			}
+			verifyAggregateLabels(kubevirt.Client(), "false")
 
 			By("Setting RoleAggregationStrategy to AggregateToDefault")
 			kv.Spec.Configuration.RoleAggregationStrategy = pointer.P(v1.RoleAggregationStrategyAggregateToDefault)
 			kvconfig.UpdateKubeVirtConfigValueAndWait(kv.Spec.Configuration)
 
 			By("Verifying aggregate labels are restored")
-			for name, labelKey := range clusterRolesWithAggregateLabels {
-				clusterRole, err := kubevirt.Client().RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
-				Expect(err).ToNot(HaveOccurred())
-				Expect(clusterRole.Labels).To(HaveKeyWithValue(labelKey, "true"),
-					"ClusterRole %s should have label %s when RoleAggregationStrategy is AggregateToDefault", name, labelKey)
-			}
+			verifyAggregateLabels(kubevirt.Client(), "true")
 		})
 	})
 })
@@ -2588,84 +2643,6 @@ func getUpstreamReleaseAssetURL(tag string, assetName string) string {
 
 	Fail(fmt.Sprintf("Asset %s not found in release %s of kubevirt upstream repo", assetName, tag))
 	return ""
-}
-
-func detectLatestUpstreamOfficialTag() (string, error) {
-	client := github.NewClient(&http.Client{
-		Timeout: 5 * time.Second,
-	})
-
-	var err error
-	var releases []*github.RepositoryRelease
-
-	Eventually(func() error {
-		releases, _, err = client.Repositories.ListReleases(context.Background(), "kubevirt", "kubevirt", &github.ListOptions{PerPage: 10000})
-
-		return err
-	}, 10*time.Second, 1*time.Second).ShouldNot(HaveOccurred())
-
-	var vs []*semver.Version
-
-	for _, release := range releases {
-		if *release.Draft ||
-			*release.Prerelease ||
-			len(release.Assets) == 0 {
-
-			continue
-		}
-		tagName := strings.TrimPrefix(*release.TagName, "v")
-		v, err := semver.NewVersion(tagName)
-		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to parse latest release tag")
-		vs = append(vs, v)
-	}
-
-	if len(vs) == 0 {
-		return "", fmt.Errorf("no kubevirt releases found")
-	}
-
-	// descending order from most recent.
-	sort.Sort(sort.Reverse(semver.Versions(vs)))
-
-	// most recent tag
-	tag := fmt.Sprintf("v%v", vs[0])
-
-	// tag hint gives us information about the most recent tag in the current branch
-	// this is executing in. We want to make sure we are using the previous most
-	// recent official release from the branch we're in if possible. Note that this is
-	// all best effort. If a tag hint can't be detected, we move on with the most
-	// recent release from master.
-	tagHint := strings.TrimPrefix(getTagHint(), "v")
-	hint, err := semver.NewVersion(tagHint)
-
-	if tagHint != "" && err == nil {
-		for _, v := range vs {
-			if v.LessThan(*hint) || v.Equal(*hint) {
-				tag = fmt.Sprintf("v%v", v)
-				By(fmt.Sprintf("Choosing tag %s influenced by tag hint %s", tag, tagHint))
-				break
-			}
-		}
-	}
-
-	By(fmt.Sprintf("By detecting latest upstream official tag %s for current branch", tag))
-	return tag, nil
-}
-
-func getTagHint() string {
-	//git describe --tags --abbrev=0 "$(git rev-parse HEAD)"
-	cmd := exec.Command("git", "rev-parse", "HEAD")
-	cmdOutput, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	cmd = exec.Command("git", "describe", "--tags", "--abbrev=0", strings.TrimSpace(string(cmdOutput)))
-	cmdOutput, err = cmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSpace(strings.Split(string(cmdOutput), "-rc")[0])
 }
 
 func atLeastOnePendingPodExistInDeployment(virtClient kubecli.KubevirtClient, deploymentName string) bool {
@@ -3287,4 +3264,18 @@ func verifyVMIsUpdated(vmis []*v1.VirtualMachineInstance) {
 			g.Expect(count).To(Equal(1), "vmi [%s] returned %d successful migrations", vmi.Name, count)
 		}
 	}).WithTimeout(10*time.Second).WithPolling(time.Second).Should(Succeed(), "Expects only a single successful migration per workload update")
+}
+
+func verifyAggregateLabels(virtClient kubecli.KubevirtClient, expectedValue string) {
+	clusterRolesWithAggregateLabels := map[string]string{
+		rbac.ClusterRoleAdmin: "rbac.authorization.k8s.io/aggregate-to-admin",
+		rbac.ClusterRoleEdit:  "rbac.authorization.k8s.io/aggregate-to-edit",
+		rbac.ClusterRoleView:  "rbac.authorization.k8s.io/aggregate-to-view",
+	}
+	for name, labelKey := range clusterRolesWithAggregateLabels {
+		clusterRole, err := virtClient.RbacV1().ClusterRoles().Get(context.Background(), name, metav1.GetOptions{})
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		ExpectWithOffset(1, clusterRole.Labels).To(HaveKeyWithValue(labelKey, expectedValue),
+			"ClusterRole %s should have label %s=%s", name, labelKey, expectedValue)
+	}
 }

@@ -27,14 +27,11 @@ import (
 	"kubevirt.io/kubevirt/pkg/network/vmispec"
 )
 
-type clusterConfigurer interface {
-	LiveUpdateNADRefEnabled() bool
-}
 type netChangePredicate func(map[string]v1.Network, map[string]v1.Network) bool
 
 // IsRestartRequired - Checks if the changes in network related fields require a reset of the VM
 // in order for them to be applied
-func IsRestartRequired(vm *v1.VirtualMachine, vmi *v1.VirtualMachineInstance, clusterConfigurer clusterConfigurer) bool {
+func IsRestartRequired(vm *v1.VirtualMachine, vmi *v1.VirtualMachineInstance) bool {
 	desiredIfaces := vm.Spec.Template.Spec.Domain.Devices.Interfaces
 	currentIfaces := vmi.Spec.Domain.Devices.Interfaces
 
@@ -42,7 +39,7 @@ func IsRestartRequired(vm *v1.VirtualMachine, vmi *v1.VirtualMachineInstance, cl
 	currentNets := vmi.Spec.Networks
 
 	netChangePredicates := []netChangePredicate{haveCurrentNetsBeenRemoved}
-	if clusterConfigurer.LiveUpdateNADRefEnabled() {
+	if vmi.IsMigratable() {
 		netChangePredicates = append(netChangePredicates, haveNetsChangedIgnoringNADName)
 	} else {
 		netChangePredicates = append(netChangePredicates, haveCurrentNetsChanged)
